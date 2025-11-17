@@ -1,7 +1,7 @@
 # parser.py
 from Evtx.Evtx import Evtx
-from Evtx.Views import evtx_file_xml_view
 from collections import Counter
+import xml.etree.ElementTree as ET
 
 def parse_evtx(file_path):
     """Parse a Windows EVTX file and return a list of XML event strings."""
@@ -17,17 +17,37 @@ def parse_evtx(file_path):
 
 
 def extract_event_ids(events):
-    """Extract Event IDs from the XML strings."""
+    """Extract Event IDs from the XML strings using proper XML parsing."""
     event_ids = []
     for xml_data in events:
         try:
-            # Look for <EventID>number</EventID> in XML
-            start = xml_data.find("<EventID>") + len("<EventID>")
-            end = xml_data.find("</EventID>")
-            if start > 0 and end > 0:
-                event_ids.append(xml_data[start:end])
+            # Parse XML properly
+            root = ET.fromstring(xml_data)
+            
+            # Find EventID in the System section
+            # Handle namespaces
+            namespaces = {'ns': 'http://schemas.microsoft.com/win/2004/08/events/event'}
+            
+            # Try with namespace first
+            event_id_elem = root.find('.//ns:EventID', namespaces)
+            
+            # If not found, try without namespace
+            if event_id_elem is None:
+                event_id_elem = root.find('.//EventID')
+            
+            if event_id_elem is not None and event_id_elem.text:
+                event_ids.append(event_id_elem.text.strip())
+                
         except Exception as e:
-            print(f"Error extracting Event ID: {e}")
+            # Fallback to string parsing if XML parsing fails
+            try:
+                start = xml_data.find("<EventID>") + len("<EventID>")
+                end = xml_data.find("</EventID>")
+                if start > 0 and end > 0:
+                    event_ids.append(xml_data[start:end].strip())
+            except Exception as e2:
+                print(f"Error extracting Event ID: {e2}")
+                
     return event_ids
 
 
