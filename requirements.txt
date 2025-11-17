@@ -1,21 +1,10 @@
 # DuCharme Triage Assistant Tool - Requirements
 # Sprint 3 Demo Dependencies
-
 # Core log parsing library
 python-evtx==0.7.4
-
-# GUI framework (Tkinter is built-in to Python, no install needed)
-# But including here for documentation purposes
-# tkinter - comes with Python standard library
-
-# XML parsing (built-in to Python)
-# xml.etree.ElementTree - comes with Python standard library
-
-# Future dependencies (Sprint 4+)
-# Uncomment when ready to implement
-
+# For creating executable
+pyinstaller==6.2.0
 # Report generation - PDF
 # reportlab==4.0.7
-
 # Report generation - Text templates
-# jinja2==3.1.2
+jinja2==3.1.2
