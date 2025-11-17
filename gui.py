@@ -1,175 +1,249 @@
-import { useState } from 'react';
-import { Button } from './components/ui/button';
-import { Label } from './components/ui/label';
-import { Input } from './components/ui/input';
-import { ScrollArea } from './components/ui/scroll-area';
-import { FileText, Upload, Trash2, X } from 'lucide-react';
+# gui.py
+import tkinter as tk
+from tkinter import filedialog, scrolledtext, messagebox
+from tkinter import ttk
+import os
 
-export default function App() {
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [filePath, setFilePath] = useState<string>('');
-  const [results, setResults] = useState<string>('');
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      setSelectedFile(file);
-      setFilePath(file.name);
-    }
-  };
-
-  const handleBrowseClick = () => {
-    document.getElementById('fileInput')?.click();
-  };
-
-  const handleAnalyze = async () => {
-    if (!selectedFile) {
-      setResults('Please select a log file first.');
-      return;
-    }
-
-    setIsAnalyzing(true);
-    setResults('Analyzing log file...\n');
-
-    // Simulate analysis process
-    setTimeout(() => {
-      const mockResults = `Analysis Results for: ${selectedFile.name}
-=====================================
+class TriageToolGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("DuCharme Triage Assistant")
+        self.root.geometry("800x600")
+        self.root.resizable(True, True)
+        
+        # Variables
+        self.file_path = tk.StringVar()
+        self.selected_file = None
+        
+        # Create GUI elements
+        self.create_widgets()
+        
+    def create_widgets(self):
+        # Header Frame
+        header_frame = tk.Frame(self.root, bg="#1e40af", pady=10)
+        header_frame.pack(fill=tk.X)
+        
+        header_label = tk.Label(
+            header_frame, 
+            text="DuCharme Triage Assistant",
+            font=("Arial", 16, "bold"),
+            bg="#1e40af",
+            fg="white"
+        )
+        header_label.pack()
+        
+        # Main Content Frame
+        main_frame = tk.Frame(self.root, padx=20, pady=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # File Selection Section
+        file_frame = tk.LabelFrame(main_frame, text="Select Log File", padx=10, pady=10)
+        file_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # File path entry
+        file_entry = tk.Entry(file_frame, textvariable=self.file_path, state='readonly', width=60)
+        file_entry.pack(side=tk.LEFT, padx=(0, 10), fill=tk.X, expand=True)
+        
+        # Browse button
+        browse_btn = tk.Button(
+            file_frame, 
+            text="Browse...", 
+            command=self.browse_file,
+            bg="#3b82f6",
+            fg="white",
+            padx=15,
+            pady=5
+        )
+        browse_btn.pack(side=tk.LEFT)
+        
+        # Analyze Button
+        analyze_btn = tk.Button(
+            main_frame,
+            text="Analyze",
+            command=self.analyze_log,
+            bg="#1e40af",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            padx=30,
+            pady=10
+        )
+        analyze_btn.pack(pady=(0, 10))
+        
+        # Results Section
+        results_frame = tk.LabelFrame(main_frame, text="Results", padx=10, pady=10)
+        results_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        # Scrolled text for results
+        self.results_text = scrolledtext.ScrolledText(
+            results_frame,
+            wrap=tk.WORD,
+            width=80,
+            height=20,
+            font=("Courier", 9),
+            bg="#f8fafc"
+        )
+        self.results_text.pack(fill=tk.BOTH, expand=True)
+        self.results_text.insert(tk.END, "No results yet. Select a log file and click Analyze.")
+        self.results_text.config(state=tk.DISABLED)
+        
+        # Button Frame
+        button_frame = tk.Frame(main_frame)
+        button_frame.pack(fill=tk.X)
+        
+        # Clear button
+        clear_btn = tk.Button(
+            button_frame,
+            text="Clear Results",
+            command=self.clear_results,
+            padx=15,
+            pady=5
+        )
+        clear_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Exit button
+        exit_btn = tk.Button(
+            button_frame,
+            text="Exit",
+            command=self.exit_app,
+            bg="#dc2626",
+            fg="white",
+            padx=15,
+            pady=5
+        )
+        exit_btn.pack(side=tk.RIGHT)
+        
+    def browse_file(self):
+        """Open file dialog to select .evtx file"""
+        filename = filedialog.askopenfilename(
+            title="Select Windows Event Log File",
+            filetypes=[
+                ("Event Log Files", "*.evtx"),
+                ("All Files", "*.*")
+            ]
+        )
+        if filename:
+            self.selected_file = filename
+            self.file_path.set(filename)
+            
+    def analyze_log(self):
+        """Trigger log analysis"""
+        if not self.selected_file:
+            messagebox.showwarning("No File Selected", "Please select a log file first.")
+            return
+            
+        if not os.path.exists(self.selected_file):
+            messagebox.showerror("File Not Found", "The selected file does not exist.")
+            return
+        
+        # Clear previous results
+        self.results_text.config(state=tk.NORMAL)
+        self.results_text.delete(1.0, tk.END)
+        self.results_text.insert(tk.END, "Analyzing log file...\n")
+        self.results_text.update()
+        
+        # Import parser and run analysis
+        try:
+            from parser import parse_evtx, extract_event_ids
+            from collections import Counter
+            
+            # Parse the file
+            events = parse_evtx(self.selected_file)
+            
+            if not events:
+                self.results_text.insert(tk.END, "\nError: No events found or file could not be parsed.\n")
+                self.results_text.config(state=tk.DISABLED)
+                return
+            
+            # Extract Event IDs
+            event_ids = extract_event_ids(events)
+            
+            # Generate results
+            results = self.generate_results(self.selected_file, events, event_ids)
+            
+            # Display results
+            self.results_text.delete(1.0, tk.END)
+            self.results_text.insert(tk.END, results)
+            self.results_text.config(state=tk.DISABLED)
+            
+        except Exception as e:
+            self.results_text.delete(1.0, tk.END)
+            self.results_text.insert(tk.END, f"Error during analysis:\n{str(e)}")
+            self.results_text.config(state=tk.DISABLED)
+            messagebox.showerror("Analysis Error", f"An error occurred:\n{str(e)}")
+    
+    def generate_results(self, file_path, events, event_ids):
+        """Generate formatted results string"""
+        from collections import Counter
+        import os
+        from datetime import datetime
+        
+        file_size = os.path.getsize(file_path) / 1024  # KB
+        counts = Counter(event_ids)
+        
+        results = f"""Analysis Results for: {os.path.basename(file_path)}
+{"=" * 60}
 
 File Information:
-- File Name: ${selectedFile.name}
-- File Size: ${(selectedFile.size / 1024).toFixed(2)} KB
-- File Type: ${selectedFile.type || 'text/plain'}
-- Last Modified: ${new Date(selectedFile.lastModified).toLocaleString()}
+- File Name: {os.path.basename(file_path)}
+- File Path: {file_path}
+- File Size: {file_size:.2f} KB
+- Analysis Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
-Analysis Summary:
-- Total Lines Processed: ${Math.floor(Math.random() * 10000) + 1000}
-- Errors Found: ${Math.floor(Math.random() * 50)}
-- Warnings Found: ${Math.floor(Math.random() * 100)}
-- Info Messages: ${Math.floor(Math.random() * 500)}
+Event Summary:
+- Total Events Parsed: {len(events)}
+- Unique Event IDs Found: {len(counts)}
 
-Top Issues:
-1. Connection timeout errors - 15 occurrences
-2. Memory usage warnings - 8 occurrences
-3. API rate limit warnings - 5 occurrences
-4. Database query timeouts - 3 occurrences
+Event ID Breakdown:
+{"=" * 60}
+"""
+        
+        # Add Event ID counts
+        for eid, count in counts.most_common():
+            results += f"Event ID {eid}: {count} occurrences\n"
+        
+        # Highlight critical Event IDs
+        critical_ids = {
+            '4624': 'Successful Logon',
+            '4625': 'Failed Logon Attempt',
+            '4672': 'Special Privileges Assigned',
+            '4688': 'Process Creation',
+            '1102': 'Audit Log Cleared'
+        }
+        
+        results += f"\n{'=' * 60}\nCritical Events Found:\n{'=' * 60}\n"
+        
+        found_critical = False
+        for eid, description in critical_ids.items():
+            if eid in counts:
+                results += f"⚠ Event ID {eid} ({description}): {counts[eid]} occurrences\n"
+                found_critical = True
+        
+        if not found_critical:
+            results += "No critical security events detected in this log.\n"
+        
+        results += f"\n{'=' * 60}\n"
+        results += "Analysis Complete.\n"
+        
+        return results
+    
+    def clear_results(self):
+        """Clear the results text area"""
+        self.results_text.config(state=tk.NORMAL)
+        self.results_text.delete(1.0, tk.END)
+        self.results_text.insert(tk.END, "No results yet. Select a log file and click Analyze.")
+        self.results_text.config(state=tk.DISABLED)
+    
+    def exit_app(self):
+        """Exit the application"""
+        if messagebox.askokcancel("Exit", "Are you sure you want to exit?"):
+            self.root.quit()
+    
+    def run(self):
+        """Start the GUI event loop"""
+        self.root.mainloop()
 
-Recommendations:
-- Review connection pool settings
-- Monitor memory allocation
-- Implement rate limiting backoff
-- Optimize database queries
 
-Analysis completed at: ${new Date().toLocaleString()}
-`;
-      setResults(mockResults);
-      setIsAnalyzing(false);
-    }, 2000);
-  };
-
-  const handleClearResults = () => {
-    setResults('');
-  };
-
-  const handleExit = () => {
-    if (confirm('Are you sure you want to exit?')) {
-      setSelectedFile(null);
-      setFilePath('');
-      setResults('');
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center p-8">
-      <div className="w-full max-w-4xl bg-white rounded-lg shadow-xl border border-slate-200">
-        {/* Header */}
-        <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white px-6 py-4 rounded-t-lg">
-          <div className="flex items-center gap-3">
-            <FileText className="w-6 h-6" />
-            <h1>DuCharme Triage Assistant</h1>
-          </div>
-        </div>
-
-        {/* Main Content */}
-        <div className="p-6 space-y-6">
-          {/* File Selection Section */}
-          <div className="space-y-3">
-            <Label htmlFor="filePath" className="text-slate-700">
-              Select Log File:
-            </Label>
-            <div className="flex gap-3">
-              <Input
-                id="filePath"
-                type="text"
-                value={filePath}
-                placeholder="No file selected"
-                readOnly
-                className="flex-1 bg-slate-50"
-              />
-              <Button 
-                onClick={handleBrowseClick}
-                variant="outline"
-                className="gap-2"
-              >
-                <Upload className="w-4 h-4" />
-                Browse...
-              </Button>
-              <input
-                id="fileInput"
-                type="file"
-                accept=".log,.txt,.json"
-                onChange={handleFileSelect}
-                className="hidden"
-              />
-            </div>
-          </div>
-
-          {/* Analyze Button */}
-          <div>
-            <Button 
-              onClick={handleAnalyze}
-              disabled={!selectedFile || isAnalyzing}
-              className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700"
-            >
-              {isAnalyzing ? 'Analyzing...' : 'Analyze'}
-            </Button>
-          </div>
-
-          {/* Results Display Area */}
-          <div className="space-y-2">
-            <Label className="text-slate-700">Results:</Label>
-            <ScrollArea className="h-80 w-full rounded-md border border-slate-200 bg-slate-50">
-              <div className="p-4">
-                <pre className="whitespace-pre-wrap text-slate-800">
-                  {results || 'No results yet. Select a log file and click Analyze.'}
-                </pre>
-              </div>
-            </ScrollArea>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="flex gap-3 pt-4 border-t border-slate-200">
-            <Button
-              onClick={handleClearResults}
-              variant="outline"
-              className="gap-2"
-              disabled={!results}
-            >
-              <Trash2 className="w-4 h-4" />
-              Clear Results
-            </Button>
-            <Button
-              onClick={handleExit}
-              variant="destructive"
-              className="gap-2 ml-auto"
-            >
-              <X className="w-4 h-4" />
-              Exit
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = TriageToolGUI(root)
+    app.run()
