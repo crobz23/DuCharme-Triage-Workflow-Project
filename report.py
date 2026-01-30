@@ -48,6 +48,15 @@ def create_test_pdf(filename="test_report.pdf", file_path=None, results=None, ma
         parent=styles['Title'],
         fontSize=24,
         textColor=colors.HexColor('#1e40af'),
+        spaceAfter=6,
+        alignment=1  # Center
+    )
+    
+    subtitle_style = ParagraphStyle(
+        'CustomSubtitle',
+        parent=styles['Title'],
+        fontSize=24,
+        textColor=colors.HexColor('#1e40af'),
         spaceAfter=30,
         alignment=1  # Center
     )
@@ -61,9 +70,11 @@ def create_test_pdf(filename="test_report.pdf", file_path=None, results=None, ma
         spaceBefore=12,
     )
     
-    # Title
-    title = Paragraph("DuCharme Triage Assistant - Analysis Report", title_style)
+    # Title (two centered lines)
+    title = Paragraph("DuCharme Triage Assistant", title_style)
     story.append(title)
+    subtitle = Paragraph("Analysis Report", subtitle_style)
+    story.append(subtitle)
     story.append(Spacer(1, 0.3 * inch))
     
     # Report Generated timestamp
@@ -79,10 +90,13 @@ def create_test_pdf(filename="test_report.pdf", file_path=None, results=None, ma
         story.append(Paragraph("1) FILE INFORMATION", heading_style))
         story.append(Spacer(1, 10))
         
+        # Get directory path without filename
+        directory_path = os.path.dirname(file_path)
+        
         file_info_data = [
             ["Property", "Value"],
             ["File Name", os.path.basename(file_path)],
-            ["File Path", file_path],
+            ["File Path", directory_path],
             ["File Size", f"{os.path.getsize(file_path) / 1024:.2f} KB"],
             ["Analysis Date", datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
         ]
