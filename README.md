@@ -375,9 +375,9 @@ python --version
 ## Credits
 
 **Development Team** 
-- Collin Robertson - Project Manager, Analysis Engine, Integrator, Tester
-- Matthew Kunkel - Timeline Analysis
-- Nathan Weidner - Report Generation
+- Collin Robinson - Project Manager, Analysis Engine, Integrator, Tester
+- Matthew Domsich - Timeline Analysis, Parsing, Researcher
+- Nathan Bradshaw - Report Generation, GUI Designer
 
 **Sponsor**
 - Eric Gaby
