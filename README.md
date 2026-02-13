@@ -385,7 +385,7 @@ python --version
 **Special Thanks**
 - Dr. David Corcoran (Advisor)
 - Dr. William Topp (Advisor)
-- Senior Capstone
+- Senior Capstone Classmates
 
 ---
 
