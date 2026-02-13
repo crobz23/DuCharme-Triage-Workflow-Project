@@ -255,11 +255,50 @@ class TriageToolGUI:
         """Get description for a given Event ID"""
         # Windows Security Event IDs
         windows_events = {
+        # System.evtx Events (user-friendly for non-IT people)
         '1': 'A system error occurred',
-        '104': 'An event log was cleared',
+        '6': 'A driver was loaded',
+        '7': 'A service was started or stopped',
+        '10': 'A COM+ catalog error occurred',
+        '11': 'A disk controller error was detected',
+        '12': 'The Service Control Manager started',
+        '13': 'The Service Control Manager stopped',
+        '15': 'A disk device error occurred',
+        '41': 'The computer restarted unexpectedly',
+        '42': 'The computer is entering sleep mode',
+        '51': 'A disk paging error occurred',
+        '55': 'A file system corruption was detected',
+        '104': 'The System log was cleared',
+        '107': 'The computer woke up from sleep',
+        '109': 'A kernel power transition occurred',
+        '1001': 'A Windows Error Reporting crash occurred',
+        '1014': 'A DNS client resolution timeout occurred',
         '1100': 'Event logging was shut down',
         '1101': 'Audit events were dropped',
-        '1102': 'An audit log was cleared',
+        '1102': 'The Security audit log was cleared',
+        '1530': 'A user profile could not be loaded',
+        '6005': 'The Event Log service started',
+        '6006': 'The Event Log service stopped',
+        '6008': 'An unexpected system shutdown occurred',
+        '6009': 'System boot information was logged',
+        '6013': 'System uptime was recorded',
+        '7000': 'A service failed to start',
+        '7001': 'A service depends on another service that failed',
+        '7009': 'A service timeout occurred during startup',
+        '7011': 'A service timeout occurred during operation',
+        '7022': 'A service hung on starting',
+        '7023': 'A service terminated with an error',
+        '7024': 'A service terminated with a service-specific error',
+        '7026': 'A boot-start or system-start driver failed to load',
+        '7030': 'A service was configured incorrectly',
+        '7031': 'A service terminated unexpectedly',
+        '7032': 'The Service Control Manager attempted corrective action',
+        '7034': 'A service crashed unexpectedly',
+        '7035': 'A service control was sent',
+        '7036': 'A service entered running or stopped state',
+        '7040': 'A service startup type was changed',
+        '7045': 'A new service was installed',
+        # Security/Application Event IDs (technical format)
         '4103': 'A PowerShell script was executed',
         '4104': 'A PowerShell command was executed',
         '4105': 'A PowerShell script started',
@@ -283,14 +322,15 @@ class TriageToolGUI:
         '4700': 'A scheduled task was enabled',
         '4701': 'A scheduled task was disabled',
         '4702': 'A scheduled task was updated',
-        '4719': 'Audit policy was changed',
+        '4719': 'An audit policy was changed',
         '4720': 'A user account was created',
         '4722': 'A user account was enabled',
         '4723': 'A password change was attempted',
         '4724': 'A password reset was attempted',
         '4725': 'A user account was disabled',
         '4726': 'A user account was deleted',
-        '4732': 'A user was added to a group',
+        '4728': 'A user was added to a global security group',
+        '4732': 'A user was added to a local security group',
         '4733': 'A user was removed from a group',
         '4735': 'A security group was changed',
         '4737': 'A global security group was changed',
@@ -301,9 +341,9 @@ class TriageToolGUI:
         '4757': 'A user was removed from a universal group',
         '4765': 'A security identifier history was added',
         '4767': 'A user account was unlocked',
-        '4768': 'A login ticket was requested',
-        '4769': 'A service ticket was requested',
-        '4771': 'A login pre-authentication failed',
+        '4768': 'A Kerberos login ticket was requested',
+        '4769': 'A Kerberos service ticket was requested',
+        '4771': 'A Kerberos pre-authentication failed',
         '4776': 'A login attempt was validated',
         '4778': 'A remote session was reconnected',
         '4779': 'A remote session was disconnected',
@@ -314,8 +354,6 @@ class TriageToolGUI:
         '5141': 'A directory object was deleted',
         '5142': 'A network folder was shared',
         '5145': 'A network folder access was checked',
-        '7040': 'A service startup type was changed',
-        '7045': 'A service was installed',
         }
         
         # Sysmon Event IDs
@@ -323,7 +361,7 @@ class TriageToolGUI:
             '1': 'A program was started',
             '2': 'A file timestamp was changed',
             '3': 'A network connection was made',
-            '4': 'A monitoring service changed state',
+            '4': 'A Sysmon service state changed',
             '5': 'A program was closed',
             '6': 'A driver was loaded',
             '7': 'A library file was loaded',
@@ -335,12 +373,12 @@ class TriageToolGUI:
             '13': 'A registry value was set',
             '14': 'A registry entry was renamed',
             '15': 'A file stream was created',
-            '16': 'A service configuration was changed',
+            '16': 'A Sysmon configuration was changed',
             '17': 'A communication pipe was created',
             '18': 'A communication pipe was connected',
-            '19': 'A system management filter was detected',
-            '20': 'A system management consumer was detected',
-            '21': 'A system management binding was detected',
+            '19': 'A WMI event filter was detected',
+            '20': 'A WMI event consumer was detected',
+            '21': 'A WMI event binding was detected',
             '22': 'A DNS query was made',
             '23': 'A file was deleted',
             '24': 'A clipboard change was detected',
@@ -734,8 +772,11 @@ File Information:
 
 Event Summary:
 - Total Events Parsed: {results['total_events']}
-- Windows Events: {results['total_windows']}
 - Sysmon Events: {results['total_sysmon']}
+- Security Events: {results['total_security']}
+- System Events: {results['total_system']}
+- Application Events: {results['total_application']}
+- Other Windows Events: {results['total_other_windows']}
 - Unique Event IDs Found: {len(results['counts'])}
 
 Event ID Breakdown:
@@ -745,24 +786,7 @@ Event ID Breakdown:
         for eid in sorted(results['counts'].keys(), key=lambda x: int(x)):
             output += f"Event ID {eid}: {results['counts'][eid]} occurrences\n"
         
-        critical_windows_ids = {
-            '4624': 'Successful Logon',
-            '4625': 'Failed Logon Attempt',
-            '4672': 'Special Privileges Assigned',
-            '4688': 'Process Creation',
-            '1102': 'Audit Log Cleared'
-        }
-        
-        output += f"\n{'=' * 60}\nCritical Windows Events Found:\n{'=' * 60}\n"
-        
-        found_critical = False
-        for eid, description in critical_windows_ids.items():
-            if eid in results['counts']:
-                output += f"⚠️ Event ID {eid} ({description}): {results['counts'][eid]} occurrences\n"
-                found_critical = True
-        
-        if not found_critical:
-            output += "No critical Windows security events detected in this log.\n"
+        # Removed "Critical Windows Events Found" section - redundant with threat analysis
         
         if results['total_sysmon'] > 0:
             common_sysmon_ids = {
@@ -835,18 +859,18 @@ Event ID Breakdown:
         return output
     
     def generate_malware_summary(self, malware_analysis):
-        """Generate formatted malware analysis summary"""
+        """Generate formatted threat analysis summary"""
         if not malware_analysis:
             return ""
         
-        output = f"\n{'=' * 60}\nMALWARE THREAT ANALYSIS\n{'=' * 60}\n"
+        output = f"\n{'=' * 60}\nTHREAT ANALYSIS\n{'=' * 60}\n"
         output += f"Risk Level: {malware_analysis['risk_level']}\n"
         output += f"Highest CVSS Score: {malware_analysis['highest_cvss_score']}\n"
-        output += f"Malware Indicators Found: {malware_analysis['total_malware_events']}\n"
+        output += f"Threat Indicators Found: {malware_analysis['total_malware_events']}\n"
         output += f"Total Event Occurrences: {malware_analysis['total_event_occurrences']}\n\n"
         
         # Show top threats
-        output += "Top Malware Threats:\n"
+        output += "Top Threats:\n"
         from analysis import MalwareAnalyzer
         analyzer = MalwareAnalyzer()
         top_threats = analyzer.get_top_threats(malware_analysis, top_n=5)
@@ -883,11 +907,422 @@ Event ID Breakdown:
         self.clear_filter_btn.config(state=tk.DISABLED)
         self.update_filter_badge()
     
+    def collect_incident_context(self):
+        """Collect incident context information via dialog"""
+        # Create dialog window
+        context_dialog = tk.Toplevel(self.root)
+        context_dialog.title("Incident Context Information")
+        context_dialog.geometry("700x600")
+        context_dialog.resizable(False, False)
+        context_dialog.transient(self.root)
+        context_dialog.grab_set()
+        
+        # Center the dialog
+        context_dialog.update_idletasks()
+        x = (context_dialog.winfo_screenwidth() // 2) - (700 // 2)
+        y = (context_dialog.winfo_screenheight() // 2) - (600 // 2)
+        context_dialog.geometry(f"+{x}+{y}")
+        
+        # Result storage
+        result = {'submitted': False}
+        
+        # Main frame
+        main_frame = tk.Frame(context_dialog, padx=30, pady=20, bg="white")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Title with close button
+        title_frame = tk.Frame(main_frame, bg="white")
+        title_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        title_label = tk.Label(
+            title_frame,
+            text="Incident Context Information",
+            font=("Arial", 16, "bold"),
+            bg="white"
+        )
+        title_label.pack(side=tk.LEFT)
+        
+        close_btn = tk.Button(
+            title_frame,
+            text="✕",
+            font=("Arial", 14),
+            bg="white",
+            fg="#64748b",
+            relief=tk.FLAT,
+            cursor="hand2",
+            command=context_dialog.destroy
+        )
+        close_btn.pack(side=tk.RIGHT)
+        
+        # Field 1: Reported by / How it was reported
+        tk.Label(
+            main_frame,
+            text="Reported by / How it was reported",
+            font=("Arial", 10),
+            bg="white",
+            fg="#374151"
+        ).pack(anchor='w', pady=(0, 5))
+        
+        reporter_text = tk.Text(main_frame, height=3, wrap=tk.WORD, font=("Arial", 10), relief=tk.SOLID, borderwidth=1)
+        reporter_text.pack(fill=tk.X, pady=(0, 15))
+        reporter_text.insert("1.0", "e.g., John Smith via email, Security Operations Center alert, etc.")
+        reporter_text.config(fg='gray')
+        
+        # Field 2: What was observed
+        tk.Label(
+            main_frame,
+            text="What was observed",
+            font=("Arial", 10),
+            bg="white",
+            fg="#374151"
+        ).pack(anchor='w', pady=(0, 5))
+        
+        observed_text = tk.Text(main_frame, height=3, wrap=tk.WORD, font=("Arial", 10), relief=tk.SOLID, borderwidth=1)
+        observed_text.pack(fill=tk.X, pady=(0, 15))
+        observed_text.insert("1.0", "e.g., Multiple failed login attempts, unusual network traffic, suspicious process execution, etc.")
+        observed_text.config(fg='gray')
+        
+        # Field 3: Possible cause (if known)
+        tk.Label(
+            main_frame,
+            text="Possible cause (if known)",
+            font=("Arial", 10),
+            bg="white",
+            fg="#374151"
+        ).pack(anchor='w', pady=(0, 5))
+        
+        cause_text = tk.Text(main_frame, height=3, wrap=tk.WORD, font=("Arial", 10), relief=tk.SOLID, borderwidth=1)
+        cause_text.pack(fill=tk.X, pady=(0, 15))
+        cause_text.insert("1.0", "e.g., Phishing attempt, credential compromise, malware infection, etc. (Leave blank if unknown)")
+        cause_text.config(fg='gray')
+        
+        # Field 4: Impact to Business Operations (if known)
+        tk.Label(
+            main_frame,
+            text="Impact to Business Operations (if known)",
+            font=("Arial", 10),
+            bg="white",
+            fg="#374151"
+        ).pack(anchor='w', pady=(0, 5))
+        
+        impact_text = tk.Text(main_frame, height=3, wrap=tk.WORD, font=("Arial", 10), relief=tk.SOLID, borderwidth=1)
+        impact_text.pack(fill=tk.X, pady=(0, 15))
+        impact_text.insert("1.0", "e.g., System downtime, data breach risk, productivity loss, etc. (Leave blank if unknown)")
+        impact_text.config(fg='gray')
+        
+        # Placeholder text handlers
+        def on_focus_in(text_widget, placeholder):
+            if text_widget.get("1.0", "end-1c") == placeholder:
+                text_widget.delete("1.0", tk.END)
+                text_widget.config(fg='black')
+        
+        def on_focus_out(text_widget, placeholder):
+            if text_widget.get("1.0", "end-1c").strip() == "":
+                text_widget.insert("1.0", placeholder)
+                text_widget.config(fg='gray')
+        
+        # Bind focus events
+        placeholders = {
+            reporter_text: "e.g., John Smith via email, Security Operations Center alert, etc.",
+            observed_text: "e.g., Multiple failed login attempts, unusual network traffic, suspicious process execution, etc.",
+            cause_text: "e.g., Phishing attempt, credential compromise, malware infection, etc. (Leave blank if unknown)",
+            impact_text: "e.g., System downtime, data breach risk, productivity loss, etc. (Leave blank if unknown)"
+        }
+        
+        for widget, placeholder in placeholders.items():
+            widget.bind("<FocusIn>", lambda e, w=widget, p=placeholder: on_focus_in(w, p))
+            widget.bind("<FocusOut>", lambda e, w=widget, p=placeholder: on_focus_out(w, p))
+        
+        # Button frame
+        button_frame = tk.Frame(main_frame, bg="white")
+        button_frame.pack(fill=tk.X, pady=(20, 0))
+        
+        def on_cancel():
+            result['submitted'] = False
+            context_dialog.destroy()
+        
+        def on_generate():
+            # Get values (strip placeholders if still present)
+            reporter = reporter_text.get("1.0", "end-1c").strip()
+            if reporter == placeholders[reporter_text]:
+                reporter = ""
+            
+            observed = observed_text.get("1.0", "end-1c").strip()
+            if observed == placeholders[observed_text]:
+                observed = ""
+            
+            cause = cause_text.get("1.0", "end-1c").strip()
+            if cause == placeholders[cause_text]:
+                cause = ""
+            
+            impact = impact_text.get("1.0", "end-1c").strip()
+            if impact == placeholders[impact_text]:
+                impact = ""
+            
+            result['submitted'] = True
+            result['reporter'] = reporter
+            result['observed'] = observed
+            result['cause'] = cause
+            result['impact'] = impact
+            
+            context_dialog.destroy()
+        
+        # Cancel button
+        cancel_btn = tk.Button(
+            button_frame,
+            text="Cancel",
+            command=on_cancel,
+            font=("Arial", 10),
+            bg="white",
+            fg="#374151",
+            padx=20,
+            pady=8,
+            relief=tk.SOLID,
+            borderwidth=1,
+            cursor="hand2"
+        )
+        cancel_btn.pack(side=tk.RIGHT, padx=(10, 0))
+        
+        # Generate Report button
+        generate_btn = tk.Button(
+            button_frame,
+            text="Generate Report",
+            command=on_generate,
+            font=("Arial", 10, "bold"),
+            bg="#2563eb",
+            fg="white",
+            padx=20,
+            pady=8,
+            relief=tk.FLAT,
+            cursor="hand2"
+        )
+        generate_btn.pack(side=tk.RIGHT)
+        
+        # Wait for dialog to close
+        context_dialog.wait_window()
+        
+        return result if result['submitted'] else None
+    
+    def get_asset_scope_summary(self):
+        """
+        Extract asset and scope information from parsed events.
+        Returns professional summary suitable for incident response reporting.
+        
+        IMPROVED: Better user categorization (privileged vs regular), 
+        more relevant for incident triage, digestible for non-IT stakeholders.
+        """
+        if not self.all_results:
+            return None
+        
+        hostnames = set()
+        ips = set()
+        privileged_users = set()
+        regular_users = set()
+        domains = set()
+        logon_types_raw = set()
+        
+        # Track OS info from events
+        os_info = set()
+        
+        # Track time range
+        earliest_time = None
+        latest_time = None
+        
+        # Track security-relevant event IDs
+        security_relevant_events = set()
+        
+        # Collect from all event types
+        all_events = []
+        all_events.extend(self.all_results.get('sysmon_events', []))
+        all_events.extend(self.all_results.get('security_events', []))
+        all_events.extend(self.all_results.get('system_events', []))
+        all_events.extend(self.all_results.get('application_events', []))
+        all_events.extend(self.all_results.get('windows_events', []))
+        
+        for event in all_events:
+            # Track security-relevant event IDs
+            event_id = event.get('event_id', '')
+            if event_id in ['4624', '4625', '4648', '4672', '4688', '4720', '4732']:
+                security_relevant_events.add(event_id)
+            
+            # Get timestamp
+            basic_info = event.get('basic_info', {})
+            time_created = basic_info.get('time_created')
+            if time_created:
+                if earliest_time is None or time_created < earliest_time:
+                    earliest_time = time_created
+                if latest_time is None or time_created > latest_time:
+                    latest_time = time_created
+            
+            asset_scope = event.get('asset_scope', {})
+            event_data = event.get('data', {})
+            
+            # Extract Asset information
+            asset = asset_scope.get('asset', {})
+            if asset.get('hostname'):
+                hostnames.add(asset['hostname'])
+            if asset.get('ip_addresses'):
+                for ip in asset['ip_addresses']:
+                    if ip and ip not in ['-', '0.0.0.0', '127.0.0.1', '::1']:
+                        ips.add(ip)
+            
+            # Extract Scope information (IMPROVED CATEGORIZATION)
+            scope = asset_scope.get('scope', {})
+            
+            # Privileged users (administrators, etc.)
+            if scope.get('privileged_users'):
+                for user in scope['privileged_users']:
+                    privileged_users.add(user)
+            
+            # Regular users
+            if scope.get('regular_users'):
+                for user in scope['regular_users']:
+                    regular_users.add(user)
+            
+            # Domain information
+            if scope.get('domains'):
+                for domain in scope['domains']:
+                    domains.add(domain)
+            
+            # LogonType for access method analysis
+            if scope.get('LogonType'):
+                logon_types_raw.add(scope['LogonType'])
+            
+            # Try to extract OS info from event data
+            # Event ID 6013 (System uptime) sometimes has OS info
+            # Sysmon events may contain OS version
+            if event_data.get('OSVersion'):
+                os_info.add(event_data['OSVersion'])
+            if event_data.get('ProductName'):
+                os_info.add(event_data['ProductName'])
+        
+        # Clean up domains - remove junk values and hostnames
+        junk_domains = {
+            '-', '', 'WORKGROUP', 'NT AUTHORITY', 'Window Manager',
+            'Font Driver Host', 'Builtin', 'MicrosoftAccount'
+        }
+        # Also remove anything that looks like a hostname (already shown in hostname field)
+        cleaned_domains = set()
+        for domain in domains:
+            # Skip if it's junk
+            if domain in junk_domains:
+                continue
+            # Skip if it matches any hostname (avoid duplication)
+            if domain in hostnames:
+                continue
+            cleaned_domains.add(domain)
+        
+        domains = cleaned_domains
+        
+        # ==================== BUILD HUMAN-READABLE SUMMARY ====================
+        
+        # User summary with context
+        user_summary_parts = []
+        
+        if privileged_users:
+            priv_count = len(privileged_users)
+            priv_list = ', '.join(sorted(privileged_users)[:5])
+            if priv_count > 5:
+                priv_list += f' ... and {priv_count - 5} more'
+            user_summary_parts.append(f"<b>{priv_count} Administrator(s):</b> {priv_list}")
+        
+        if regular_users:
+            reg_count = len(regular_users)
+            reg_list = ', '.join(sorted(regular_users)[:5])
+            if reg_count > 5:
+                reg_list += f' ... and {reg_count - 5} more'
+            user_summary_parts.append(f"<b>{reg_count} Regular User(s):</b> {reg_list}")
+        
+        if not privileged_users and not regular_users:
+            users_display = 'No human user activity detected in logs'
+        else:
+            users_display = '<br/>'.join(user_summary_parts)
+        
+        # Convert logon types to human-readable, non-technical descriptions
+        logon_type_descriptions = []
+        logon_type_map = {
+            '0': 'System',
+            '2': 'Local (at keyboard)',
+            '3': 'Network (file sharing)',
+            '4': 'Scheduled task',
+            '5': 'Windows service',
+            '7': 'Screen unlock',
+            '10': 'Remote Desktop',
+            '11': 'Offline login'
+        }
+        
+        # Categorize for simpler reporting
+        has_local = False
+        has_remote = False
+        has_network = False
+        has_automated = False
+        
+        for lt in logon_types_raw:
+            if lt in ['2', '7', '11']:  # Local interactive types
+                has_local = True
+            elif lt == '10':  # Remote Desktop
+                has_remote = True
+            elif lt == '3':  # Network access
+                has_network = True
+            elif lt in ['4', '5']:  # Automated
+                has_automated = True
+        
+        # Build simple, clear summary
+        access_summary = []
+        if has_local:
+            access_summary.append("Local access (user at keyboard)")
+        if has_remote:
+            access_summary.append("Remote Desktop connections")
+        if has_network:
+            access_summary.append("Network file/printer access")
+        if has_automated:
+            access_summary.append("Automated tasks/services")
+        
+        access_methods_text = ', '.join(access_summary) if access_summary else 'No login activity detected'
+        
+        # Get channel/provider info for "Tool Version"
+        has_sysmon = self.all_results.get('total_sysmon', 0) > 0
+        has_security = self.all_results.get('total_security', 0) > 0
+        has_system = self.all_results.get('total_system', 0) > 0
+        
+        log_sources = []
+        if has_sysmon:
+            log_sources.append('Sysmon')
+        if has_security:
+            log_sources.append('Security')
+        if has_system:
+            log_sources.append('System')
+        
+        return {
+            'hostname': ', '.join(sorted(hostnames)) if hostnames else 'Unknown',
+            'os_version': self.all_results.get('os_version') if self.all_results.get('os_version') else 'Not detected in logs',
+            'users_logged_in': users_display,
+            'privileged_user_count': len(privileged_users),
+            'regular_user_count': len(regular_users),
+            'network_ips': ', '.join(sorted(ips)[:10]) if ips else 'No external network activity detected',
+            'ip_count': len(ips) if ips else 0,
+            'domains': ', '.join(sorted(domains)) if domains else 'WORKGROUP',
+            'access_methods': access_methods_text,
+            'log_sources': ', '.join(log_sources) if log_sources else 'Windows Event Logs',
+            'analysis_timeframe': f"{earliest_time[:19] if earliest_time and isinstance(earliest_time, str) else 'Unknown'} to {latest_time[:19] if latest_time and isinstance(latest_time, str) else 'Unknown'}",
+            'total_events': self.all_results.get('total_events', 0)
+        }
+    
     def generate_pdf_report(self):
         """Generate a PDF report of the analysis results"""
         if not self.all_results or not self.selected_file:
             messagebox.showwarning("No Data", "Please analyze a log file first.")
             return
+        
+        # Collect incident context information
+        incident_context = self.collect_incident_context()
+        
+        # If user cancelled the context dialog, don't generate report
+        if incident_context is None:
+            return
+        
+        # Extract asset and scope information from parsed events
+        asset_scope = self.get_asset_scope_summary()
         
         try:
             from datetime import datetime
@@ -907,13 +1342,15 @@ Event ID Breakdown:
             # Import and call report module
             from report import create_test_pdf
             
-            # Generate the PDF with analysis data, malware analysis, and timeline
+            # Generate the PDF with all analysis data
             pdf_path = create_test_pdf(
                 filename=save_path,
                 file_path=self.selected_file,
                 results=self.all_results,
                 malware_analysis=self.malware_analysis,
-                timeline_data=self.timeline_data
+                timeline_data=self.timeline_data,
+                incident_context=incident_context,
+                asset_scope=asset_scope  # ← NEW: Asset & Scope data
             )
             
             messagebox.showinfo(
