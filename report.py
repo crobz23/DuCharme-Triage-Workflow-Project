@@ -15,16 +15,18 @@ from datetime import datetime
 import os
 
 
-def create_test_pdf(filename="test_report.pdf", file_path=None, results=None, malware_analysis=None, timeline_data=None):
+def create_test_pdf(filename="test_report.pdf", file_path=None, results=None, malware_analysis=None, timeline_data=None, incident_context=None, asset_scope=None):
     """
     Create a PDF report for the DuCharme Triage Assistant.
     
     Args:
         filename: Output PDF filename
         file_path: Path to the analyzed log file
-        results: Analysis results dictionary (optional, not currently used)
+        results: Analysis results dictionary from parser
         malware_analysis: Malware analysis results from analysis.py
         timeline_data: Timeline analysis results from analysis.py
+        incident_context: Incident context information from GUI dialog
+        asset_scope: Asset and scope information from GUI
     
     Returns:
         str: Path to the generated PDF file
@@ -116,14 +118,24 @@ def create_test_pdf(filename="test_report.pdf", file_path=None, results=None, ma
         story.append(file_table)
         story.append(Spacer(1, 0.3 * inch))
     
-    # === SECTION 2: TIMELINE ANALYSIS ===
+    # === SECTION 2: ASSET & SCOPE ===
+    if asset_scope:
+        asset_scope_section = generate_asset_scope_section(asset_scope, heading_style, styles, section_number=2)
+        story.extend(asset_scope_section)
+    
+    # === SECTION 3: INCIDENT CONTEXT ===
+    if incident_context:
+        incident_context_section = generate_incident_context_section(incident_context, heading_style, styles, section_number=3)
+        story.extend(incident_context_section)
+    
+    # === SECTION 4: TIMELINE ANALYSIS ===
     if timeline_data and timeline_data.get('chronological_events'):
-        timeline_section = generate_timeline_section(timeline_data, styles)
+        timeline_section = generate_timeline_section(timeline_data, styles, heading_style, section_number=4)
         story.extend(timeline_section)
     
-    # === SECTION 3: INDICATORS & SCORING (SUMMARY) ===
+    # === SECTION 5: INDICATORS & SCORING ===
     if malware_analysis:
-        indicators_section = generate_indicators_scoring_section(malware_analysis, styles)
+        indicators_section = generate_indicators_scoring_section(malware_analysis, styles, heading_style, section_number=5)
         story.extend(indicators_section)
     
     # Footer
@@ -140,30 +152,22 @@ def create_test_pdf(filename="test_report.pdf", file_path=None, results=None, ma
     return filename
 
 
-def generate_timeline_section(timeline_data, styles):
+def generate_timeline_section(timeline_data, styles, heading_style, section_number=4):
     """
-    Generate Section 2: TIMELINE ANALYSIS for the PDF report.
+    Generate Timeline Analysis section for the PDF report.
     
     Args:
         timeline_data: Dictionary from extract_timeline() containing chronological and grouped events
         styles: ReportLab styles object
+        heading_style: Style for section headings
+        section_number: Section number to display
     
     Returns:
         List of ReportLab flowables for the timeline section
     """
     section_content = []
     
-    # Section heading
-    heading_style = ParagraphStyle(
-        'CustomHeading',
-        parent=styles['Heading1'],
-        fontSize=14,
-        textColor=colors.HexColor('#1e40af'),
-        spaceAfter=12,
-        spaceBefore=12,
-    )
-    
-    section_content.append(Paragraph("2) TIMELINE ANALYSIS", heading_style))
+    section_content.append(Paragraph(f"{section_number}) TIMELINE (LAST N DAYS)", heading_style))
     section_content.append(Spacer(1, 10))
     
     chronological = timeline_data.get('chronological_events', [])
@@ -257,30 +261,220 @@ def generate_timeline_section(timeline_data, styles):
     return section_content
 
 
-def generate_indicators_scoring_section(malware_analysis_results, styles):
+def generate_asset_scope_section(asset_scope, heading_style, styles, section_number=2):
     """
-    Generate Section 5: INDICATORS & SCORING (SUMMARY) for malware events.
+    Generate Asset & Scope section for the PDF report.
+    Professional format suitable for non-technical stakeholders.
+    
+    Args:
+        asset_scope: Dictionary from GUI's get_asset_scope_summary()
+        heading_style: Style for section headings
+        styles: ReportLab styles object
+        section_number: Section number to display
+    
+    Returns:
+        List of ReportLab flowables for the asset scope section
+    """
+    section_content = []
+    
+    section_content.append(Paragraph(f"{section_number}) ASSET & SCOPE", heading_style))
+    section_content.append(Spacer(1, 10))
+    
+    if not asset_scope:
+        no_data_text = Paragraph(
+            "<i>No asset or scope data available.</i>",
+            styles['BodyText']
+        )
+        section_content.append(no_data_text)
+        section_content.append(Spacer(1, 20))
+        return section_content
+    
+    # Create professional summary table
+    summary_data = [["Property", "Value"]]
+    
+    # Hostname
+    hostname = asset_scope.get('hostname', 'Unknown')
+    summary_data.append([
+        Paragraph("<b>Affected System:</b>", styles['BodyText']),
+        Paragraph(hostname, styles['BodyText'])
+    ])
+    
+    # OS / Version / Patch Level
+    os_version = asset_scope.get('os_version', 'Not detected in logs')
+    summary_data.append([
+        Paragraph("<b>Operating System:</b>", styles['BodyText']),
+        Paragraph(os_version, styles['BodyText'])
+    ])
+    
+    # User Accounts (IMPROVED - shows privilege breakdown)
+    users = asset_scope.get('users_logged_in', 'No user activity detected')
+    priv_count = asset_scope.get('privileged_user_count', 0)
+    reg_count = asset_scope.get('regular_user_count', 0)
+    
+    if priv_count > 0 or reg_count > 0:
+        total_users = priv_count + reg_count
+        context_text = f"<i>{total_users} unique user account(s) detected</i><br/>{users}"
+    else:
+        context_text = users
+    
+    summary_data.append([
+        Paragraph("<b>User Accounts:</b>", styles['BodyText']),
+        Paragraph(context_text, styles['BodyText'])
+    ])
+    
+    # Network / IP Addresses
+    network_ips = asset_scope.get('network_ips', 'No external network activity detected')
+    ip_count = asset_scope.get('ip_count', 0)
+    
+    if ip_count > 0:
+        network_text = f"{network_ips}"
+        if ip_count > 10:
+            network_text += f"<br/><i>({ip_count} total unique IPs detected)</i>"
+    else:
+        network_text = network_ips
+    
+    summary_data.append([
+        Paragraph("<b>Network Connections:</b>", styles['BodyText']),
+        Paragraph(network_text, styles['BodyText'])
+    ])
+    
+    # Domain
+    domains = asset_scope.get('domains', 'WORKGROUP')
+    domain_label = "Domain:" if domains != 'WORKGROUP' else "Domain/Workgroup:"
+    summary_data.append([
+        Paragraph(f"<b>{domain_label}</b>", styles['BodyText']),
+        Paragraph(domains, styles['BodyText'])
+    ])
+    
+    # Access Methods (How system was accessed)
+    access_methods = asset_scope.get('access_methods', 'No login activity detected')
+    summary_data.append([
+        Paragraph("<b>How System Was Accessed:</b>", styles['BodyText']),
+        Paragraph(access_methods, styles['BodyText'])
+    ])
+    
+    # Tool Version / Profile (what logs were analyzed)
+    log_sources = asset_scope.get('log_sources', 'Windows Event Logs')
+    summary_data.append([
+        Paragraph("<b>Evidence Sources:</b>", styles['BodyText']),
+        Paragraph(log_sources, styles['BodyText'])
+    ])
+    
+    # Runtime / Analysis Timeframe
+    timeframe = asset_scope.get('analysis_timeframe', 'Unknown')
+    total_events = asset_scope.get('total_events', 0)
+    runtime_text = f"{timeframe}<br/><i>Total Events Analyzed: {total_events:,}</i>"
+    summary_data.append([
+        Paragraph("<b>Analysis Timeframe:</b>", styles['BodyText']),
+        Paragraph(runtime_text, styles['BodyText'])
+    ])
+    
+    # Create the table
+    summary_table = Table(summary_data, colWidths=[2.2*inch, 4.3*inch])
+    summary_table.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+            ("GRID", (0, 0), (-1, -1), 1, colors.black),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ])
+    )
+    
+    section_content.append(summary_table)
+    section_content.append(Spacer(1, 20))
+    
+    return section_content
+
+
+def generate_incident_context_section(incident_context, heading_style, styles, section_number=3):
+    """
+    Generate Incident Context section for the PDF report.
+    
+    Args:
+        incident_context: Dictionary containing incident context information
+        heading_style: Style for section headings
+        styles: ReportLab styles object
+        section_number: Section number to display
+    
+    Returns:
+        List of ReportLab flowables for the incident context section
+    """
+    section_content = []
+    
+    section_content.append(Paragraph(f"{section_number}) INCIDENT CONTEXT (INPUT)", heading_style))
+    section_content.append(Spacer(1, 10))
+    
+    if not incident_context:
+        no_context_text = Paragraph(
+            "<i>No incident context information provided.</i>",
+            styles['BodyText']
+        )
+        section_content.append(no_context_text)
+        section_content.append(Spacer(1, 20))
+        return section_content
+    
+    context_data = [["Field", "Information"]]
+    
+    # Add incident context fields - MATCHES GUI field names (reporter, observed, cause, impact)
+    context_fields = {
+        'reporter': 'How was this incident reported?',
+        'observed': 'What was observed?',
+        'cause': 'Suspected cause (if known)',
+        'impact': 'Impact on business/operations'
+    }
+    
+    for field_key, field_label in context_fields.items():
+        if incident_context.get(field_key):
+            value = str(incident_context[field_key])
+            # Don't truncate - let Paragraph handle wrapping instead
+            context_data.append([Paragraph(field_label, styles['BodyText']), Paragraph(value, styles['BodyText'])])
+    
+    if len(context_data) > 1:  # Has data beyond header
+        context_table = Table(context_data, colWidths=[2*inch, 4*inch])
+        context_table.setStyle(
+            TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+                ("WORDWRAP", (0, 0), (-1, -1), True),  # Enable word wrap
+            ])
+        )
+        section_content.append(context_table)
+    else:
+        section_content.append(Paragraph("<i>No incident context data available.</i>", styles['BodyText']))
+    
+    section_content.append(Spacer(1, 20))
+    
+    return section_content
+
+
+def generate_indicators_scoring_section(malware_analysis_results, styles, heading_style, section_number=5):
+    """
+    Generate Indicators & Scoring section for malware events.
     
     Args:
         malware_analysis_results: Dictionary from MalwareAnalyzer.analyze_for_malware()
         styles: ReportLab styles object
+        heading_style: Style for section headings
+        section_number: Section number to display
     
     Returns:
         List of ReportLab flowables (Paragraphs, Tables, Spacers) for the section
     """
     section_content = []
     
-    # Section heading
-    heading_style = ParagraphStyle(
-        'CustomHeading',
-        parent=styles['Heading1'],
-        fontSize=14,
-        textColor=colors.HexColor('#1e40af'),
-        spaceAfter=12,
-        spaceBefore=12,
-    )
-    
-    section_content.append(Paragraph("3) INDICATORS & SCORING (SUMMARY)", heading_style))
+    section_content.append(Paragraph(f"{section_number}) INDICATORS & SCORING (SUMMARY)", heading_style))
     section_content.append(Spacer(1, 10))
     
     # Get malware indicators sorted by CVSS score (highest first) for triage
@@ -316,7 +510,7 @@ def generate_indicators_scoring_section(malware_analysis_results, styles):
         section_content.append(Paragraph(indicator_text, indicator_style))
         
         # Line 3: CVSS Score
-        cvss_text = f"<b>CVSS Score:</b> {indicator['cvss_score']}"
+        cvss_text = f"<b>CVSS Score:</b> {indicator.get('cvss_score', 'N/A')}"
         section_content.append(Paragraph(cvss_text, indicator_style))
         
         # Line 4: Evidence (placeholder for now)
@@ -352,4 +546,3 @@ if __name__ == "__main__":
     print("=== DuCharme Triage Assistant - Report Generator ===")
     print("This module generates PDF reports from log analysis.")
     print("Usage: Import and call create_test_pdf() with analysis data.")
-
