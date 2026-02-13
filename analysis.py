@@ -20,84 +20,65 @@ class MalwareAnalyzer:
     Scores events based on malware threat indicators loaded from CSV.
     """
     
-    def __init__(self, csv_path='malware_indicators.csv'):
+    def __init__(self, malware_csv='malware_indicators.csv', breach_csv='breach_indicators.csv'):
         """
-        Initialize the malware analyzer by loading threat mappings from CSV.
+        Initialize the malware analyzer by loading threat mappings from CSV files.
         
         Args:
-            csv_path: Path to the CSV file containing malware indicators
+            malware_csv: Path to the CSV file containing malware indicators
+            breach_csv: Path to the CSV file containing breach/account attack indicators
         """
-        self.csv_path = csv_path
+        self.malware_csv_path = malware_csv
+        self.breach_csv_path = breach_csv
         self.malware_events = {}
-        self.load_malware_indicators()
+        self.load_all_indicators()
     
-    def load_malware_indicators(self):
+    def load_all_indicators(self):
+        """Load both malware and breach indicators"""
+        print("Loading threat indicators...")
+        self.load_indicators_from_csv(self.malware_csv_path, 'malware')
+        self.load_indicators_from_csv(self.breach_csv_path, 'breach')
+        print(f"✓ Loaded {len(self.malware_events)} total threat indicators")
+    
+    def load_indicators_from_csv(self, csv_filename, indicator_type):
         """
-        Load malware indicator definitions from CSV file.
-        
-        CSV Format:
-        EventID,Description,Threat,CVSSScore,Category,Indicators,OWASPCategory
-        
-        CVSSScore uses CVSS v3.1 scale (0.0-10.0):
-        - 0.0: None
-        - 0.1-3.9: Low Risk
-        - 4.0-6.9: Medium Risk  
-        - 7.0-8.9: High Risk
-        - 9.0-10.0: Critical Risk
-        
-        OWASPCategory examples:
-        - A01:2021 - Broken Access Control
-        - A02:2021 - Cryptographic Failures
-        - A03:2021 - Injection
-        - A05:2021 - Security Misconfiguration
-        - A06:2021 - Vulnerable and Outdated Components
-        - A07:2021 - Identification and Authentication Failures
-        - A08:2021 - Software and Data Integrity Failures
-        - A09:2021 - Security Logging and Monitoring Failures
-        - A10:2021 - Server-Side Request Forgery
-        
-        Indicators column uses semicolon (;) as separator for multiple items.
+        Load indicator definitions from CSV file.
+        Supports both malware_indicators.csv and breach_indicators.csv formats.
         """
         # Handle PyInstaller bundled resources
         if getattr(sys, 'frozen', False):
-            # Running in a PyInstaller bundle
             bundle_dir = sys._MEIPASS
-            csv_path = os.path.join(bundle_dir, 'malware_indicators.csv')
+            csv_path = os.path.join(bundle_dir, csv_filename)
         else:
-            # Running in normal Python environment
-            csv_path = self.csv_path
+            csv_path = csv_filename
         
         if not os.path.exists(csv_path):
-            print(f"WARNING: CSV file not found at {csv_path}")
-            print("Using default location check...")
+            print(f"WARNING: {indicator_type} CSV not found at {csv_path}")
             # Try alternate locations
             alternate_paths = [
-                'malware_indicators.csv',
-                './malware_indicators.csv',
-                '../malware_indicators.csv',
+                csv_filename,
+                f'./{csv_filename}',
+                f'../{csv_filename}',
             ]
             
-            # If bundled, also check bundle directory
             if getattr(sys, 'frozen', False):
                 bundle_dir = sys._MEIPASS
-                alternate_paths.insert(0, os.path.join(bundle_dir, 'malware_indicators.csv'))
+                alternate_paths.insert(0, os.path.join(bundle_dir, csv_filename))
             
             for alt_path in alternate_paths:
                 if os.path.exists(alt_path):
                     csv_path = alt_path
-                    print(f"Found CSV at: {alt_path}")
+                    print(f"Found {indicator_type} CSV at: {alt_path}")
                     break
             else:
-                raise FileNotFoundError(
-                    f"Could not find malware_indicators.csv. "
-                    f"Please ensure the CSV file is in the same directory as analysis.py "
-                    f"or bundled with PyInstaller using --add-data flag"
-                )
+                print(f"Skipping {indicator_type} indicators - file not found")
+                return
         
         try:
             with open(csv_path, 'r', encoding='utf-8') as csvfile:
                 reader = csv.DictReader(csvfile)
                 
+                loaded_count = 0
                 for row in reader:
                     event_id = row['EventID'].strip()
                     
@@ -105,23 +86,25 @@ class MalwareAnalyzer:
                     indicators_str = row['Indicators'].strip()
                     indicators = [ind.strip() for ind in indicators_str.split(';') if ind.strip()]
                     
-                    # Get OWASP category if present, otherwise default to empty
-                    owasp_category = row.get('OWASPCategory', '').strip()
+                    # Handle both Score and CVSSScore columns
+                    score_key = 'Score' if 'Score' in row else 'CVSSScore'
+                    score = float(row[score_key].strip())
                     
                     # Create event entry
                     self.malware_events[event_id] = {
                         'description': row['Description'].strip(),
                         'threat': row['Threat'].strip(),
-                        'score': float(row['CVSSScore'].strip()),
+                        'score': score,
                         'category': row['Category'].strip(),
                         'indicators': indicators,
-                        'owasp_category': owasp_category
+                        'type': indicator_type
                     }
-            
-            print(f"✓ Loaded {len(self.malware_events)} malware indicators from CSV")
+                    loaded_count += 1
+                
+                print(f"  - Loaded {loaded_count} {indicator_type} indicators")
             
         except Exception as e:
-            raise Exception(f"Error loading CSV file: {e}")
+            print(f"Error loading {indicator_type} CSV: {e}")
     
     def analyze_for_malware(self, results):
         """
@@ -375,18 +358,19 @@ class MalwareAnalyzer:
 
 
 # Convenience function for quick analysis
-def analyze_malware(results, csv_path='malware_indicators.csv'):
+def analyze_malware(results, malware_csv='malware_indicators.csv', breach_csv='breach_indicators.csv'):
     """
     Quick wrapper function for malware analysis.
     
     Args:
         results: Dictionary from parser.analyze_events()
-        csv_path: Path to CSV file with malware indicators (default: 'malware_indicators.csv')
+        malware_csv: Path to CSV file with malware indicators (default: 'malware_indicators.csv')
+        breach_csv: Path to CSV file with breach indicators (default: 'breach_indicators.csv')
     
     Returns:
         Malware analysis results dictionary
     """
-    analyzer = MalwareAnalyzer(csv_path=csv_path)
+    analyzer = MalwareAnalyzer(malware_csv=malware_csv, breach_csv=breach_csv)
     return analyzer.analyze_for_malware(results)
 
 def extract_timeline(events, window_minutes=5):
