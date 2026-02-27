@@ -178,7 +178,8 @@ This installs the libraries the tool needs to run (ReportLab for PDFs, python-ev
 ### Basic Workflow
 
 **Step 1: Start the application**
-
+1. Launch the .exe
+2.
 ```bash
 python main.py
 ```
@@ -187,7 +188,7 @@ A window will open with the DuCharme Triage Assistant interface.
 
 **Step 2: Load your log file(s)**
 
-Click "Browse" and select one or more Windows event log files (.evtx), or select an entire folder to load all .evtx files inside it at once. You can mix log types — Security, System, and Sysmon logs can all be loaded together and the results will be merged automatically.
+Click "Browse" and select one or more Windows event log files (.evtx), or select an entire folder to load all .evtx files inside it at once. You can mix log types. Security, System, and Sysmon logs can all be loaded together, and the results will be merged automatically.
 
 Common log locations:
 - `C:\Windows\System32\winevt\Logs\Security.evtx` (Security events)
