@@ -1,4 +1,4 @@
-# gui.py - FIXED: Scroll bar error when filter dialog closes
+# gui.py
 import tkinter as tk
 from tkinter import filedialog, scrolledtext, messagebox
 from tkinter import ttk
@@ -43,17 +43,17 @@ class TriageToolGUI:
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # File Selection Section
-        file_frame = tk.LabelFrame(main_frame, text="Select Log File", padx=10, pady=10)
+        file_frame = tk.LabelFrame(main_frame, text="Select Log File or Directory", padx=10, pady=10)
         file_frame.pack(fill=tk.X, pady=(0, 10))
         
         # File path entry
         file_entry = tk.Entry(file_frame, textvariable=self.file_path, state='readonly', width=60)
         file_entry.pack(side=tk.LEFT, padx=(0, 10), fill=tk.X, expand=True)
         
-        # Browse button
+        # Browse file button
         browse_btn = tk.Button(
-            file_frame, 
-            text="Browse...", 
+            file_frame,
+            text="Browse File...",
             command=self.browse_file,
             bg="#3b82f6",
             fg="white",
@@ -61,6 +61,18 @@ class TriageToolGUI:
             pady=5
         )
         browse_btn.pack(side=tk.LEFT)
+
+        # Browse directory button
+        browse_dir_btn = tk.Button(
+            file_frame,
+            text="Browse Directory...",
+            command=self.browse_directory,
+            bg="#3b82f6",
+            fg="white",
+            padx=15,
+            pady=5
+        )
+        browse_dir_btn.pack(side=tk.LEFT, padx=(10, 0))
         
         # Control Frame (Analyze + Filter)
         control_frame = tk.Frame(main_frame)
@@ -182,28 +194,59 @@ class TriageToolGUI:
             self.selected_file = filename
             self.file_path.set(filename)
             
+    def browse_directory(self):
+        """Open directory dialog to select a folder containing .evtx files"""
+        directory = filedialog.askdirectory(
+            title="Select Directory Containing Event Log Files"
+        )
+        if directory:
+            evtx_files = [
+                os.path.join(directory, f)
+                for f in os.listdir(directory)
+                if f.lower().endswith('.evtx')
+            ]
+            if not evtx_files:
+                messagebox.showwarning("No Files Found", "No .evtx files were found in the selected directory.")
+                return
+            self.selected_file = evtx_files
+            self.file_path.set(f"{directory} ({len(evtx_files)} .evtx file(s))")
+
     def analyze_log(self):
         """Trigger log analysis"""
         if not self.selected_file:
-            messagebox.showwarning("No File Selected", "Please select a log file first.")
+            messagebox.showwarning("No File Selected", "Please select a log file or directory first.")
             return
-            
-        if not os.path.exists(self.selected_file):
-            messagebox.showerror("File Not Found", "The selected file does not exist.")
-            return
-        
+
+        # Determine list of files to analyze
+        if isinstance(self.selected_file, list):
+            files_to_analyze = self.selected_file
+            for f in files_to_analyze:
+                if not os.path.exists(f):
+                    messagebox.showerror("File Not Found", f"The file does not exist:\n{f}")
+                    return
+        else:
+            if not os.path.exists(self.selected_file):
+                messagebox.showerror("File Not Found", "The selected file does not exist.")
+                return
+            files_to_analyze = [self.selected_file]
+
         # Clear previous results and filters
         self.results_text.config(state=tk.NORMAL)
         self.results_text.delete(1.0, tk.END)
-        self.results_text.insert(tk.END, "Analyzing log file...\n")
+        self.results_text.insert(tk.END, f"Analyzing {len(files_to_analyze)} file(s)...\n")
         self.results_text.update()
-        
+
         # Import parser and run analysis
         try:
             from parser import parse_evtx, analyze_events
-            
-            # Parse the file
-            events = parse_evtx(self.selected_file)
+
+            all_events = []
+            for filepath in files_to_analyze:
+                file_events = parse_evtx(filepath)
+                if file_events:
+                    all_events.extend(file_events)
+
+            events = all_events
             
             if not events:
                 self.results_text.insert(tk.END, "\nError: No events found or file could not be parsed.\n")
@@ -213,21 +256,22 @@ class TriageToolGUI:
             # Analyze events
             self.all_results = analyze_events(events)
             
-            # Run malware analysis
-            from analysis import analyze_malware, extract_timeline
-            self.malware_analysis = analyze_malware(self.all_results)
-            
-            # Extract timeline from raw XML events
+            # Extract timeline from raw XML events (needed for confidence boosting)
             # Need to get raw XML strings from events
+            from analysis import analyze_malware, extract_timeline
+            import xml.etree.ElementTree as ET
+            
             raw_events = []
             for event in events:
                 try:
-                    import xml.etree.ElementTree as ET
                     raw_events.append(ET.tostring(event, encoding='unicode'))
                 except:
                     continue
             
             self.timeline_data = extract_timeline(raw_events)
+            
+            # Run malware analysis with timeline data for confidence boosting
+            self.malware_analysis = analyze_malware(self.all_results, self.timeline_data)
             
             # Extract available Event IDs and enable filter and report button
             self.available_event_ids = sorted(self.all_results['counts'].keys(), key=lambda x: int(x))
@@ -238,7 +282,8 @@ class TriageToolGUI:
             self.update_filter_badge()
             
             # Generate and display results (including malware analysis and timeline)
-            output = self.generate_results(self.selected_file, self.all_results)
+            display_path = self.selected_file if isinstance(self.selected_file, str) else f"{len(self.selected_file)} files from directory"
+            output = self.generate_results(display_path, self.all_results)
             output += self.generate_timeline_summary(self.timeline_data)
             output += self.generate_malware_summary(self.malware_analysis)
             self.results_text.delete(1.0, tk.END)
@@ -759,15 +804,28 @@ Filtered Event ID Breakdown:
         import os
         from datetime import datetime
         
-        file_size = os.path.getsize(file_path) / 1024
+        # Handle display path for multiple files
+        if "files from directory" in file_path:
+            # Multiple files case - use display text
+            file_display = file_path
+            file_size_text = "Multiple files"
+        else:
+            # Single file case
+            try:
+                file_size = os.path.getsize(file_path) / 1024
+                file_size_text = f"{file_size:.2f} KB"
+                file_display = os.path.basename(file_path)
+            except:
+                file_size_text = "Unknown"
+                file_display = file_path
         
-        output = f"""Analysis Results for: {os.path.basename(file_path)}
+        output = f"""Analysis Results for: {file_display}
 {"=" * 60}
 
 File Information:
-- File Name: {os.path.basename(file_path)}
-- File Path: {file_path}
-- File Size: {file_size:.2f} KB
+- File(s): {file_display}
+- File Path: {file_path if not "files from directory" in file_path else "Multiple files from directory"}
+- File Size: {file_size_text}
 - Analysis Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 Event Summary:
@@ -859,35 +917,58 @@ Event ID Breakdown:
         return output
     
     def generate_malware_summary(self, malware_analysis):
-        """Generate formatted threat analysis summary"""
+        """Generate streamlined threat analysis summary for IT teams"""
         if not malware_analysis:
             return ""
-        
-        output = f"\n{'=' * 60}\nTHREAT ANALYSIS\n{'=' * 60}\n"
-        output += f"Risk Level: {malware_analysis['risk_level']}\n"
-        output += f"Highest CVSS Score: {malware_analysis['highest_cvss_score']}\n"
-        output += f"Threat Indicators Found: {malware_analysis['total_malware_events']}\n"
-        output += f"Total Event Occurrences: {malware_analysis['total_event_occurrences']}\n\n"
-        
-        # Show top threats
-        output += "Top Threats:\n"
+
+        # Risk level indicators
+        risk_icons = {
+            "Critical": "CRITICAL",
+            "High":     "HIGH",
+            "Medium":   "MEDIUM",
+            "Low":      "LOW",
+        }
+        risk_level = malware_analysis['risk_level']
+        risk_display = risk_icons.get(risk_level, risk_level)
+
+        output  = f"\n{'=' * 60}\n"
+        output += f"THREAT ANALYSIS\n"
+        output += f"{'=' * 60}\n"
+        output += f"Overall Risk Level: {risk_display}\n"
+        output += f"Total Threat Events: {malware_analysis['total_event_occurrences']} events across {malware_analysis['total_malware_events']} threat types\n"
+
+        # ── Top threats ────────────────────────────────────────────────────
+        output += f"\n{'─' * 60}\n"
+        output += "Top Threats (by priority):\n"
         from analysis import MalwareAnalyzer
         analyzer = MalwareAnalyzer()
         top_threats = analyzer.get_top_threats(malware_analysis, top_n=5)
-        
+
         for i, threat in enumerate(top_threats, 1):
-            output += f"{i}. Event ID {threat['event_id']} - {threat['category']}\n"
-            output += f"   {threat['threat']}\n"
-            output += f"   Occurrences: {threat['count']} | CVSS Score: {threat['cvss_score']}\n\n"
-        
-        # Show category summary
-        output += "Threat Categories Detected:\n"
-        category_summary = analyzer.get_category_summary(malware_analysis)
-        for category, stats in category_summary.items():
-            output += f"- {category}: {stats['unique_events']} event type(s), Highest CVSS: {stats['highest_cvss_score']}\n"
-        
+            risk_icon = risk_icons.get(threat['matrix_risk'], threat['matrix_risk'])
+            
+            # Show impact and confidence for transparency
+            impact = threat['impact']
+            base_conf = threat['base_confidence']
+            actual_conf = threat['actual_confidence']
+            boost_reasons = threat.get('boost_reasons', [])
+            
+            # Build confidence display with specific boost explanation
+            if actual_conf > base_conf and boost_reasons:
+                # Join multiple reasons with " + " if both frequency and clustering
+                reason_text = " + ".join(boost_reasons)
+                conf_display = f"{base_conf}/4 → {actual_conf}/4 ({reason_text})"
+            else:
+                conf_display = f"{actual_conf}/4"
+            
+            output += (
+                f"\n{i}. [{risk_icon}] Event ID {threat['event_id']} - {threat['threat']}\n"
+                f"   Category: {threat['category']}\n"
+                f"   Impact: {impact}/4 | Confidence: {conf_display}\n"
+                f"   Occurrences: {threat['count']}\n"
+            )
+
         output += f"\n{'=' * 60}\n"
-        
         return output
     
     def clear_results(self):
@@ -1139,13 +1220,20 @@ Event ID Breakdown:
         all_events.extend(self.all_results.get('application_events', []))
         all_events.extend(self.all_results.get('windows_events', []))
         
+        # Well-known built-in/system accounts to exclude from user lists
+        SYSTEM_ACCOUNTS = {
+            '-', 'system', 'local service', 'network service', 'anonymous logon',
+            'window manager', 'dwm-1', 'dwm-2', 'dwm-3', 'umfd-0', 'umfd-1',
+            'font driver host', ''
+        }
+
         for event in all_events:
             # Track security-relevant event IDs
             event_id = event.get('event_id', '')
             if event_id in ['4624', '4625', '4648', '4672', '4688', '4720', '4732']:
                 security_relevant_events.add(event_id)
             
-            # Get timestamp
+            # Get timestamp and hostname from basic_info (always populated by parser)
             basic_info = event.get('basic_info', {})
             time_created = basic_info.get('time_created')
             if time_created:
@@ -1153,50 +1241,84 @@ Event ID Breakdown:
                     earliest_time = time_created
                 if latest_time is None or time_created > latest_time:
                     latest_time = time_created
-            
-            asset_scope = event.get('asset_scope', {})
+
+            # Hostname comes from basic_info['computer']
+            computer = basic_info.get('computer', '')
+            if computer:
+                hostnames.add(computer)
+
             event_data = event.get('data', {})
-            
-            # Extract Asset information
-            asset = asset_scope.get('asset', {})
-            if asset.get('hostname'):
-                hostnames.add(asset['hostname'])
-            if asset.get('ip_addresses'):
-                for ip in asset['ip_addresses']:
-                    if ip and ip not in ['-', '0.0.0.0', '127.0.0.1', '::1']:
-                        ips.add(ip)
-            
-            # Extract Scope information (IMPROVED CATEGORIZATION)
-            scope = asset_scope.get('scope', {})
-            
-            # Privileged users (administrators, etc.)
-            if scope.get('privileged_users'):
-                for user in scope['privileged_users']:
-                    privileged_users.add(user)
-            
-            # Regular users
-            if scope.get('regular_users'):
-                for user in scope['regular_users']:
-                    regular_users.add(user)
-            
-            # Domain information
-            if scope.get('domains'):
-                for domain in scope['domains']:
+
+            # --- Extract users, domains, IPs, logon types from event data fields ---
+
+            # Logon events (Security EIDs 4624, 4625, 4648)
+            if event_id in ['4624', '4625', '4648', '4634', '4647', '4672']:
+                username = event_data.get('TargetUserName') or event_data.get('SubjectUserName', '')
+                domain = event_data.get('TargetDomainName') or event_data.get('SubjectDomainName', '')
+                logon_type = event_data.get('LogonType', '')
+                ip_addr = event_data.get('IpAddress', '')
+
+                if username and username.lower() not in SYSTEM_ACCOUNTS and not username.endswith('$'):
+                    # 4672 = special privileges → privileged
+                    if event_id == '4672':
+                        privileged_users.add(username)
+                    else:
+                        regular_users.add(username)
+
+                if domain:
                     domains.add(domain)
-            
-            # LogonType for access method analysis
-            if scope.get('LogonType'):
-                logon_types_raw.add(scope['LogonType'])
-            
-            # Try to extract OS info from event data
-            # Event ID 6013 (System uptime) sometimes has OS info
-            # Sysmon events may contain OS version
+
+                if logon_type:
+                    logon_types_raw.add(logon_type)
+
+                if ip_addr and ip_addr not in ['-', '::1', '127.0.0.1', '0.0.0.0']:
+                    ips.add(ip_addr)
+
+            # Privilege escalation / admin group membership (4732, 4728, 4756)
+            if event_id in ['4732', '4728', '4756', '4720']:
+                username = event_data.get('MemberName') or event_data.get('TargetUserName', '')
+                if username and '\\' in username:
+                    username = username.split('\\')[-1]
+                if username and username.lower() not in SYSTEM_ACCOUNTS and not username.endswith('$'):
+                    privileged_users.add(username)
+
+            # Process creation (4688) — subject user
+            if event_id == '4688':
+                username = event_data.get('SubjectUserName', '')
+                domain = event_data.get('SubjectDomainName', '')
+                if username and username.lower() not in SYSTEM_ACCOUNTS and not username.endswith('$'):
+                    regular_users.add(username)
+                if domain:
+                    domains.add(domain)
+
+            # Sysmon events — user field
+            if event.get('type') == 'Sysmon':
+                username = event_data.get('User', '')
+                if username:
+                    # Format is usually DOMAIN\user
+                    parts = username.split('\\')
+                    if len(parts) == 2:
+                        domain_part, user_part = parts
+                        if domain_part:
+                            domains.add(domain_part)
+                        if user_part and user_part.lower() not in SYSTEM_ACCOUNTS and not user_part.endswith('$'):
+                            regular_users.add(user_part)
+                    elif username.lower() not in SYSTEM_ACCOUNTS:
+                        regular_users.add(username)
+
+                # Sysmon EID 3 = network connection (has DestinationIp)
+                if event_id == '3':
+                    dest_ip = event_data.get('DestinationIp', '')
+                    if dest_ip and dest_ip not in ['-', '::1', '127.0.0.1', '0.0.0.0']:
+                        ips.add(dest_ip)
+
+            # OS version — parser stores it in all_results (v4.0 approach)
             if event_data.get('OSVersion'):
                 os_info.add(event_data['OSVersion'])
             if event_data.get('ProductName'):
                 os_info.add(event_data['ProductName'])
         
-        # Clean up domains - remove junk values and hostnames
+                # Clean up domains - remove junk values and hostnames
         junk_domains = {
             '-', '', 'WORKGROUP', 'NT AUTHORITY', 'Window Manager',
             'Font Driver Host', 'Builtin', 'MicrosoftAccount'
@@ -1213,6 +1335,7 @@ Event ID Breakdown:
             cleaned_domains.add(domain)
         
         domains = cleaned_domains
+
         
         # ==================== BUILD HUMAN-READABLE SUMMARY ====================
         
@@ -1295,7 +1418,7 @@ Event ID Breakdown:
         
         return {
             'hostname': ', '.join(sorted(hostnames)) if hostnames else 'Unknown',
-            'os_version': self.all_results.get('os_version') if self.all_results.get('os_version') else 'Not detected in logs',
+            'os_version': self.all_results.get('os_version') or 'Not detected in logs',
             'users_logged_in': users_display,
             'privileged_user_count': len(privileged_users),
             'regular_user_count': len(regular_users),
@@ -1341,11 +1464,18 @@ Event ID Breakdown:
             
             # Import and call report module
             from report import create_test_pdf
-            
+
+            # Resolve file_path: if a directory was selected, selected_file is a list.
+            # Pass the directory path (common parent) instead of the list.
+            if isinstance(self.selected_file, list):
+                report_file_path = os.path.dirname(self.selected_file[0]) if self.selected_file else None
+            else:
+                report_file_path = self.selected_file
+
             # Generate the PDF with all analysis data
             pdf_path = create_test_pdf(
                 filename=save_path,
-                file_path=self.selected_file,
+                file_path=report_file_path,
                 results=self.all_results,
                 malware_analysis=self.malware_analysis,
                 timeline_data=self.timeline_data,
