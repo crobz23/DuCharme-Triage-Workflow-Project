@@ -472,4 +472,4 @@ python --version
 
 ---
 
-Version 4.1 | Last updated: Feb. 2026
+Version 5.0 | Last updated: Feb. 2026
