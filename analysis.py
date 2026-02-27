@@ -1,10 +1,9 @@
-# analysis.py - Malware-focused threat analysis engine
+# analysis.py - Malware-focused threat analysis engine with Impact/Confidence Matrix
 """
 DuCharme Triage Assistant - Malware Analysis Engine
-Analyzes Windows and Sysmon events for malware indicators and assigns threat scores.
+Analyzes Windows and Sysmon events for malware indicators using Impact × Confidence matrix.
 
-
-USES CSV FILE for malware indicator definitions
+USES CSV FILES for malware/breach indicator definitions with Impact and BaseConfidence ratings.
 """
 
 from collections import defaultdict
@@ -16,8 +15,8 @@ from datetime import datetime, timedelta
 
 class MalwareAnalyzer:
     """
-    Analyzes event logs for malware-related activity.
-    Scores events based on malware threat indicators loaded from CSV.
+    Analyzes event logs for malware-related activity using Impact × Confidence matrix.
+    Scores events based on threat indicators loaded from CSV with dynamic confidence calculation.
     """
     
     def __init__(self, malware_csv='malware_indicators.csv', breach_csv='breach_indicators.csv'):
@@ -42,7 +41,7 @@ class MalwareAnalyzer:
     
     def load_indicators_from_csv(self, csv_filename, indicator_type):
         """
-        Load indicator definitions from CSV file.
+        Load indicator definitions from CSV file with Impact and BaseConfidence.
         Supports both malware_indicators.csv and breach_indicators.csv formats.
         """
         # Handle PyInstaller bundled resources
@@ -90,11 +89,17 @@ class MalwareAnalyzer:
                     score_key = 'Score' if 'Score' in row else 'CVSSScore'
                     score = float(row[score_key].strip())
                     
+                    # Read new Impact and BaseConfidence columns
+                    impact = int(row['Impact'].strip())
+                    base_confidence = int(row['BaseConfidence'].strip())
+                    
                     # Create event entry
                     self.malware_events[event_id] = {
                         'description': row['Description'].strip(),
                         'threat': row['Threat'].strip(),
-                        'score': score,
+                        'score': score,  # Keep CVSS for reference
+                        'impact': impact,  # NEW: 1-4 scale
+                        'base_confidence': base_confidence,  # NEW: 1-4 scale
                         'category': row['Category'].strip(),
                         'indicators': indicators,
                         'type': indicator_type
@@ -106,250 +111,332 @@ class MalwareAnalyzer:
         except Exception as e:
             print(f"Error loading {indicator_type} CSV: {e}")
     
-    def analyze_for_malware(self, results):
+    def calculate_dynamic_confidence(self, event_id, base_confidence, count, timeline_data=None):
         """
-        Analyze parsed event results for malware indicators.
+        Calculate dynamic confidence based on event frequency and clustering.
+        
+        Args:
+            event_id: The Event ID being analyzed
+            base_confidence: Starting confidence from CSV (1-4)
+            count: How many times this event occurred
+            timeline_data: Optional timeline data for clustering detection
+        
+        Returns:
+            tuple: (confidence_level, boost_reasons) where boost_reasons is a list of strings
+        """
+        confidence = base_confidence
+        boost_reasons = []
+        
+        # Count-based boosting
+        if count >= 50:
+            confidence = min(4, confidence + 2)  # Lots of events = strong evidence
+            boost_reasons.append("high event frequency")
+        elif count >= 10:
+            confidence = min(4, confidence + 1)  # Moderate frequency
+            boost_reasons.append("high event frequency")
+        elif count >= 5:
+            confidence = min(4, confidence + 1)  # Some repetition
+            boost_reasons.append("high event frequency")
+        
+        # Clustering detection (if timeline data provided)
+        if timeline_data and timeline_data.get('grouped_events'):
+            grouped = timeline_data['grouped_events']
+            # Find maximum events in any single time window for this specific event_id
+            if grouped:
+                max_window_count = 0
+                for window_events in grouped.values():
+                    # Count how many events in this window match our event_id
+                    event_count = sum(1 for e in window_events if e.get('event_id') == event_id)
+                    max_window_count = max(max_window_count, event_count)
+                
+                if max_window_count >= 20:  # 20+ events of this type in 5-min window = clustered attack
+                    if confidence < 4:  # Only boost if not already at max
+                        confidence = min(4, confidence + 1)
+                        boost_reasons.append("event clustering")
+        
+        # Cap at maximum confidence level
+        return min(4, confidence), boost_reasons
+    
+    def calculate_risk_from_matrix(self, impact, confidence):
+        """
+        Calculate risk level using Impact × Confidence matrix (Eric's recommendation).
+        
+        Args:
+            impact: Impact level (1-4)
+            confidence: Confidence level (1-4)
+        
+        Returns:
+            str: Risk level ('Low', 'Medium', 'High', or 'Critical')
+        
+        Matrix:
+                     Confidence
+                  1      2       3       4
+        Impact 1  Low    Med     Med     Med
+        Impact 2  Med    Med     High    High
+        Impact 3  Med    High    Crit    Crit
+        Impact 4  High   Crit    Crit    Crit
+        """
+        matrix = {
+            (1, 1): "Low",
+            (1, 2): "Medium",
+            (1, 3): "Medium",
+            (1, 4): "Medium",
+            (2, 1): "Medium",
+            (2, 2): "Medium",
+            (2, 3): "High",
+            (2, 4): "High",
+            (3, 1): "Medium",
+            (3, 2): "High",
+            (3, 3): "Critical",
+            (3, 4): "Critical",
+            (4, 1): "High",
+            (4, 2): "Critical",
+            (4, 3): "Critical",
+            (4, 4): "Critical",
+        }
+        
+        return matrix.get((impact, confidence), "Unknown")
+    
+    def analyze_for_malware(self, results, timeline_data=None):
+        """
+        Analyze parsed event results for malware indicators using Impact × Confidence matrix.
         
         Args:
             results: Dictionary from parser.analyze_events()
                      Contains: event_ids, counts, sysmon_events, windows_events
+            timeline_data: Optional timeline data for confidence boosting
         
         Returns:
             Dictionary containing:
-                - malware_indicators: List of detected malware-related events (sorted by CVSS score)
-                - risk_level: Overall risk assessment based on highest individual score
-                - events_by_category: Grouped by MITRE ATT&CK-style categories
+                - malware_indicators: List of detected threats (sorted by risk level)
+                - risk_level: Overall risk assessment based on highest matrix risk
+                - highest_impact: Highest impact value found
+                - highest_confidence: Highest confidence value found
+                - highest_cvss_score: Kept for reference
+                - events_by_category: Grouped by MITRE ATT&CK categories
                 - recommendations: Security recommendations
         """
         
         malware_indicators = []
         events_by_category = defaultdict(list)
         highest_individual_score = 0
+        highest_impact = 0
+        highest_confidence = 0
+        
+        # Risk priority for sorting
+        risk_priority = {
+            "Critical": 4,
+            "High": 3,
+            "Medium": 2,
+            "Low": 1,
+            "Unknown": 0
+        }
+        highest_risk = "Low"
+        highest_risk_priority = 1
         
         # Analyze each event ID found in the logs
         for event_id, count in results['counts'].items():
             if event_id in self.malware_events:
                 event_info = self.malware_events[event_id]
                 
-                # Track highest individual score for risk level
+                # Get base values from CSV
+                impact = event_info['impact']
+                base_confidence = event_info['base_confidence']
+                
+                # Calculate dynamic confidence based on frequency and clustering
+                actual_confidence, boost_reasons = self.calculate_dynamic_confidence(
+                    event_id,
+                    base_confidence,
+                    count,
+                    timeline_data
+                )
+                
+                # Calculate matrix risk
+                matrix_risk = self.calculate_risk_from_matrix(impact, actual_confidence)
+                
+                # Track highest CVSS (for reference)
                 if event_info['score'] > highest_individual_score:
                     highest_individual_score = event_info['score']
                 
-                # Create indicator entry
+                # Track highest Impact and Confidence
+                if impact > highest_impact:
+                    highest_impact = impact
+                if actual_confidence > highest_confidence:
+                    highest_confidence = actual_confidence
+                
+                # Track highest risk level
+                risk_priority_value = risk_priority.get(matrix_risk, 0)
+                if risk_priority_value > highest_risk_priority:
+                    highest_risk = matrix_risk
+                    highest_risk_priority = risk_priority_value
+                
+                # Create indicator entry with matrix data
                 indicator = {
                     'event_id': event_id,
                     'description': event_info['description'],
                     'threat': event_info['threat'],
                     'count': count,
-                    'cvss_score': event_info['score'],
+                    'cvss_score': event_info['score'],  # Keep for reference
+                    'impact': impact,
+                    'base_confidence': base_confidence,
+                    'actual_confidence': actual_confidence,
+                    'confidence_boosted': actual_confidence > base_confidence,
+                    'boost_reasons': boost_reasons,  # NEW: List of boost reasons
+                    'matrix_risk': matrix_risk,
                     'category': event_info['category'],
-                    'owasp_category': event_info.get('owasp_category', ''),
                     'indicators_to_check': event_info['indicators']
                 }
                 
                 malware_indicators.append(indicator)
                 events_by_category[event_info['category']].append(indicator)
         
-        # Sort indicators by CVSS score (highest first) for triage prioritization
-        malware_indicators.sort(key=lambda x: x['cvss_score'], reverse=True)
+        # Sort indicators by risk level (Critical first), then by impact
+        malware_indicators.sort(
+            key=lambda x: (
+                risk_priority.get(x['matrix_risk'], 0),  # Primary: risk level
+                x['impact']  # Secondary: impact
+            ),
+            reverse=True
+        )
         
-        # Determine risk level based on highest individual CVSS score
-        risk_level = self._calculate_risk_level_from_cvss(highest_individual_score)
-        
-        # Generate recommendations
-        recommendations = self._generate_recommendations(events_by_category, risk_level)
+        # Generate recommendations based on matrix risk
+        recommendations = self._generate_recommendations(events_by_category, highest_risk)
         
         return {
             'malware_indicators': malware_indicators,
-            'highest_cvss_score': highest_individual_score,
-            'risk_level': risk_level,
+            'highest_cvss_score': highest_individual_score,  # Kept for reference
+            'highest_impact': highest_impact,
+            'highest_confidence': highest_confidence,
+            'risk_level': highest_risk,  # Now from matrix
             'events_by_category': dict(events_by_category),
             'recommendations': recommendations,
             'total_malware_events': len(malware_indicators),
             'total_event_occurrences': sum(ind['count'] for ind in malware_indicators)
         }
     
-    def _calculate_risk_level_from_cvss(self, highest_cvss_score):
-        """
-        Calculate overall risk level based on the highest individual CVSS v3.1 score.
-        
-        CVSS v3.1 Qualitative Severity Rating Scale:
-        - None: 0.0
-        - Low: 0.1-3.9
-        - Medium: 4.0-6.9
-        - High: 7.0-8.9
-        - Critical: 9.0-10.0
-        
-        Returns: String ('Low', 'Medium', 'High', 'Critical')
-        """
-        if highest_cvss_score == 0.0:
-            return 'None'
-        elif highest_cvss_score < 4.0:
-            return 'Low'
-        elif highest_cvss_score < 7.0:
-            return 'Medium'
-        elif highest_cvss_score < 9.0:
-            return 'High'
-        else:
-            return 'Critical'
-    
     def _generate_recommendations(self, events_by_category, risk_level):
         """
-        Generate security recommendations based on OWASP best practices.
-        Provides actionable guidance aligned with OWASP security principles.
+        Generate security recommendations based on matrix risk level and categories.
+        
+        Args:
+            events_by_category: Dictionary of events grouped by category
+            risk_level: Overall risk level from matrix ('Low', 'Medium', 'High', 'Critical')
         
         Returns: List of recommendation strings
         """
         recommendations = []
         
-        # Risk-level based recommendations (OWASP methodology)
+        # Risk-level based recommendations
         if risk_level == 'Critical':
-            recommendations.append('CRITICAL: Immediate remediation required - Follow OWASP Incident Response guidelines')
-            recommendations.append('Isolate affected systems and initiate incident response procedures')
-            recommendations.append('Conduct thorough security audit using OWASP testing methodologies')
-            recommendations.append('Implement OWASP Proactive Controls to prevent future incidents')
+            recommendations.append('CRITICAL: Immediate incident response required')
+            recommendations.append('Isolate affected systems and initiate containment procedures')
+            recommendations.append('Conduct thorough forensic analysis and root cause investigation')
+            recommendations.append('Review and strengthen security controls')
         elif risk_level == 'High':
-            recommendations.append('HIGH PRIORITY: Address identified vulnerabilities within 24-48 hours')
-            recommendations.append('Review OWASP Top 10 risks applicable to your environment')
-            recommendations.append('Implement security logging per OWASP Logging Cheat Sheet')
+            recommendations.append('HIGH PRIORITY: Address identified threats within 24-48 hours')
+            recommendations.append('Investigate suspicious activity and verify system integrity')
+            recommendations.append('Implement additional monitoring and detection controls')
         elif risk_level == 'Medium':
-            recommendations.append('MEDIUM PRIORITY: Schedule remediation within the next sprint/cycle')
-            recommendations.append('Review and update security configurations per OWASP guidelines')
-            recommendations.append('Implement defense-in-depth strategy')
+            recommendations.append('MEDIUM PRIORITY: Schedule investigation and remediation')
+            recommendations.append('Review security configurations and update as needed')
+            recommendations.append('Continue monitoring for escalation')
         else:
-            recommendations.append('LOW RISK: Continue monitoring - Maintain security baseline per OWASP ASVS')
+            recommendations.append('LOW RISK: Continue routine monitoring')
             recommendations.append('Regular security assessments recommended')
         
-        # OWASP Top 10 2021 category-specific recommendations
-        owasp_categories_found = set()
-        for events in events_by_category.values():
-            for event in events:
-                if event.get('owasp_category'):
-                    owasp_categories_found.add(event['owasp_category'])
-        
-        # A01:2021 - Broken Access Control
-        if any('A01' in cat for cat in owasp_categories_found):
-            recommendations.append('A01 - Broken Access Control: Implement principle of least privilege')
-            recommendations.append('A01: Review and enforce access controls on all resources')
-            recommendations.append('A01: Enable access control logging and audit regularly')
-        
-        # A02:2021 - Cryptographic Failures  
-        if any('A02' in cat for cat in owasp_categories_found):
-            recommendations.append('A02 - Cryptographic Failures: Audit encryption implementations')
-            recommendations.append('A02: Ensure data in transit and at rest uses strong encryption (TLS 1.2+)')
-            recommendations.append('A02: Review credential storage - use bcrypt/scrypt/Argon2')
-        
-        # A03:2021 - Injection
-        if any('A03' in cat for cat in owasp_categories_found):
-            recommendations.append('A03 - Injection: Validate and sanitize all input per OWASP Input Validation Cheat Sheet')
-            recommendations.append('A03: Use parameterized queries and prepared statements')
-            recommendations.append('A03: Implement command injection prevention controls')
-        
-        # A05:2021 - Security Misconfiguration
-        if any('A05' in cat for cat in owasp_categories_found):
-            recommendations.append('A05 - Security Misconfiguration: Review system hardening per CIS benchmarks')
-            recommendations.append('A05: Disable unnecessary services and features')
-            recommendations.append('A05: Implement security headers and configurations')
-        
-        # A06:2021 - Vulnerable and Outdated Components
-        if any('A06' in cat for cat in owasp_categories_found):
-            recommendations.append('A06 - Vulnerable Components: Conduct software inventory and vulnerability scan')
-            recommendations.append('A06: Update all software/libraries to latest secure versions')
-            recommendations.append('A06: Implement automated dependency checking (OWASP Dependency-Check)')
-        
-        # A07:2021 - Identification and Authentication Failures
-        if any('A07' in cat for cat in owasp_categories_found):
-            recommendations.append('A07 - Authentication Failures: Implement MFA on all accounts')
-            recommendations.append('A07: Enforce strong password policies (per NIST 800-63B)')
-            recommendations.append('A07: Review failed login attempts and implement account lockout')
-            recommendations.append('A07: Rotate credentials immediately if compromise suspected')
-        
-        # A08:2021 - Software and Data Integrity Failures
-        if any('A08' in cat for cat in owasp_categories_found):
-            recommendations.append('A08 - Integrity Failures: Implement code signing and verification')
-            recommendations.append('A08: Use integrity checks for critical files and configurations')
-            recommendations.append('A08: Review CI/CD pipeline security (OWASP Top 10 CI/CD Security Risks)')
-        
-        # A09:2021 - Security Logging and Monitoring Failures
-        if any('A09' in cat for cat in owasp_categories_found):
-            recommendations.append('A09 - Logging Failures: Enable comprehensive security logging per OWASP Logging Cheat Sheet')
-            recommendations.append('A09: Implement SIEM or centralized log management')
-            recommendations.append('A09: Create alerts for suspicious activities')
-            recommendations.append('A09: Ensure log integrity and retention policies')
-        
-        # A10:2021 - Server-Side Request Forgery (SSRF)
-        if any('A10' in cat for cat in owasp_categories_found):
-            recommendations.append('A10 - SSRF: Validate and sanitize all URLs')
-            recommendations.append('A10: Implement network segmentation and firewall rules')
-            recommendations.append('A10: Disable unused URL schemas (file://, gopher://, etc.)')
-        
-        # Additional general category-specific recommendations (non-OWASP categories)
+        # Category-specific recommendations (MITRE ATT&CK based)
         if 'Execution' in events_by_category:
-            recommendations.append('Process Execution: Review application whitelisting policies')
+            recommendations.append('Execution: Review application whitelisting and process execution policies')
             recommendations.append('Execution: Monitor for PowerShell/scripting abuse')
         
         if 'Persistence' in events_by_category:
             recommendations.append('Persistence: Audit scheduled tasks, services, and startup items')
-            recommendations.append('Persistence: Review registry auto-run locations')
+            recommendations.append('Persistence: Review registry auto-run locations and WMI subscriptions')
         
-        if 'Command and Control' in events_by_category:
-            recommendations.append('C2: Investigate network connections to external IPs')
-            recommendations.append('C2: Review DNS queries for suspicious domains')
-            recommendations.append('C2: Consider implementing egress filtering')
+        if 'Privilege Escalation' in events_by_category:
+            recommendations.append('Privilege Escalation: Review group membership changes immediately')
+            recommendations.append('Privilege Escalation: Force password resets for affected accounts')
+            recommendations.append('Privilege Escalation: Audit privileged service usage')
         
         if 'Defense Evasion' in events_by_category:
-            recommendations.append('Defense Evasion: Review anti-malware and EDR logs')
-            recommendations.append('Defense Evasion: Check for signs of rootkits or anti-forensics')
+            recommendations.append('Defense Evasion: Check for log tampering and enable tamper protection')
+            recommendations.append('Defense Evasion: Review anti-malware and EDR logs for tampering attempts')
+            recommendations.append('Defense Evasion: Implement file integrity monitoring')
         
         if 'Credential Access' in events_by_category:
-            recommendations.append('Credential Theft: URGENT - Force password resets for affected accounts')
-            recommendations.append('Credential Access: Review privileged account access logs')
+            recommendations.append('Credential Access: Force password resets for all affected accounts')
+            recommendations.append('Credential Access: Enable MFA on all privileged accounts immediately')
+            recommendations.append('Credential Access: Review authentication logs for unauthorized access')
+            recommendations.append('Credential Access: Check for credential dumping tools (mimikatz, etc.)')
+        
+        if 'Command and Control' in events_by_category:
+            recommendations.append('C2: Investigate network connections to external IPs immediately')
+            recommendations.append('C2: Review DNS queries for suspicious domains (DGA patterns)')
+            recommendations.append('C2: Consider implementing egress filtering and network segmentation')
+        
+        if 'Lateral Movement' in events_by_category:
+            recommendations.append('Lateral Movement: Identify compromised accounts and restrict access')
+            recommendations.append('Lateral Movement: Review admin share access and disable if unnecessary')
+            recommendations.append('Lateral Movement: Monitor for unusual remote access patterns')
         
         if 'Impact' in events_by_category:
-            recommendations.append('Impact: WARNING - Data destruction or ransomware indicators detected')
-            recommendations.append('Impact: Verify backup integrity and isolation')
+            recommendations.append('Impact: Verify backup integrity and test restoration procedures')
+            recommendations.append('Impact: Isolate affected systems to prevent further damage')
+            recommendations.append('Impact: Assess scope of data destruction or encryption')
         
-        # Add general OWASP recommendations
-        recommendations.append('General: Follow OWASP Proactive Controls for preventive security')
-        recommendations.append('General: Conduct regular security training (OWASP Top 10 awareness)')
-        recommendations.append('General: Implement Web Application Firewall (WAF) if applicable')
+        # General recommendations
+        recommendations.append('General: Ensure comprehensive security logging is enabled')
+        recommendations.append('General: Implement principle of least privilege across all systems')
         
         return recommendations
     
     def get_top_threats(self, analysis_results, top_n=5):
         """
-        Get the top N highest-scoring malware threats for triage.
+        Get the top N highest-risk malware threats for triage.
         
         Args:
             analysis_results: Results from analyze_for_malware()
             top_n: Number of top threats to return
         
         Returns:
-            List of top threat indicators sorted by CVSS score (highest first)
+            List of top threat indicators sorted by matrix risk (highest first)
         """
         indicators = analysis_results['malware_indicators']
-        # Already sorted by CVSS score in analyze_for_malware()
+        # Already sorted by matrix risk in analyze_for_malware()
         return indicators[:top_n]
     
     def get_category_summary(self, analysis_results):
         """
-        Get summary statistics by malware category for triage prioritization.
+        Get summary statistics by category for triage prioritization.
         
         Args:
             analysis_results: Results from analyze_for_malware()
         
         Returns:
-            Dictionary with category names and their highest CVSS scores
+            Dictionary with category names and their highest risk levels
         """
         category_summary = {}
         
+        risk_priority = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1, "Unknown": 0}
+        
         for category, events in analysis_results['events_by_category'].items():
-            highest_score = max(event['cvss_score'] for event in events)
+            # Find highest risk in this category
+            highest_risk = "Low"
+            highest_priority = 1
+            
+            for event in events:
+                risk = event['matrix_risk']
+                priority = risk_priority.get(risk, 0)
+                if priority > highest_priority:
+                    highest_risk = risk
+                    highest_priority = priority
+            
             event_count = len(events)
             occurrence_count = sum(event['count'] for event in events)
             
             category_summary[category] = {
-                'highest_cvss_score': highest_score,
+                'highest_risk': highest_risk,
+                'highest_cvss_score': max(event['cvss_score'] for event in events),
                 'unique_events': event_count,
                 'total_occurrences': occurrence_count
             }
@@ -358,20 +445,21 @@ class MalwareAnalyzer:
 
 
 # Convenience function for quick analysis
-def analyze_malware(results, malware_csv='malware_indicators.csv', breach_csv='breach_indicators.csv'):
+def analyze_malware(results, timeline_data=None, malware_csv='malware_indicators.csv', breach_csv='breach_indicators.csv'):
     """
-    Quick wrapper function for malware analysis.
+    Quick wrapper function for malware analysis with Impact × Confidence matrix.
     
     Args:
         results: Dictionary from parser.analyze_events()
+        timeline_data: Optional timeline data for confidence boosting
         malware_csv: Path to CSV file with malware indicators (default: 'malware_indicators.csv')
         breach_csv: Path to CSV file with breach indicators (default: 'breach_indicators.csv')
     
     Returns:
-        Malware analysis results dictionary
+        Malware analysis results dictionary with matrix risk scoring
     """
     analyzer = MalwareAnalyzer(malware_csv=malware_csv, breach_csv=breach_csv)
-    return analyzer.analyze_for_malware(results)
+    return analyzer.analyze_for_malware(results, timeline_data)
 
 def extract_timeline(events, window_minutes=5):
     """
@@ -444,11 +532,12 @@ def extract_timeline(events, window_minutes=5):
     }
 
 if __name__ == "__main__":
-    print("=== Malware Analysis Engine ===")
-    print("This module is designed to be imported and used with actual log file data.")
+    print("=== Malware Analysis Engine with Impact × Confidence Matrix ===")
+    print("This module uses Eric's recommended matrix system for context-aware risk scoring.")
     print("Usage: from analysis import analyze_malware, extract_timeline")
     print("\nTo use this module:")
     print("1. Parse your log file using parser.py")
-    print("2. Pass the results to analyze_malware(results)")
-    print("3. View threat analysis with OWASP-based scoring")
+    print("2. Extract timeline using extract_timeline(events)")
+    print("3. Pass both to analyze_malware(results, timeline_data)")
+    print("4. View threat analysis with Impact × Confidence matrix scoring")
 
