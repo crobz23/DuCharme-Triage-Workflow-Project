@@ -24,7 +24,7 @@ A Windows event log analyzer that helps incident responders quickly identify mal
 
 ## Release Notes
 
-### Version 5.0 (Current)
+### Version 5.0
 
 **New Features:**
 - Multi-file support — analyze multiple .evtx files in a single session; results are merged and displayed together
