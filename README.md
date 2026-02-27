@@ -179,7 +179,9 @@ This installs the libraries the tool needs to run (ReportLab for PDFs, python-ev
 
 **Step 1: Start the application**
 1. Launch the .exe
-2.
+
+or
+
 ```bash
 python main.py
 ```
