@@ -30,9 +30,8 @@ A Windows event log analyzer that helps incident responders quickly identify mal
 - Multi-file support — analyze multiple .evtx files in a single session; results are merged and displayed together
 - Directory parsing — select an entire folder of .evtx files instead of loading them one at a time
 - Threat scoring now uses an Impact × Confidence risk matrix instead of raw CVSS scores alone
-- breach_indicators.csv added as a second threat database covering account-based attacks (brute force, privilege escalation, account lockouts, log clearing)
 - Dynamic confidence boosting — confidence scores are raised automatically when events repeat frequently or cluster in short time windows
-- Events from all log types (Security, System, Sysmon, Application) are now combined and analyzed together across multi-file loads
+- Events from all log types (Security, System, Sysmon) are now combined and analyzed together across multi-file loads
 
 
 ---
