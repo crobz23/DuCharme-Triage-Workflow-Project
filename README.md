@@ -287,7 +287,6 @@ Each detected threat is scored using two values and then run through a risk matr
 
 Confidence is boosted automatically when:
 - The same Event ID appears 5 or more times → +1
-- The same Event ID appears 10 or more times → +1
 - The same Event ID appears 50 or more times → +2
 - 20 or more events of the same type occur in a single 5-minute window → +1 (active attack clustering)
 
