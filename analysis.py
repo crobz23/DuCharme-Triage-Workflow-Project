@@ -80,6 +80,7 @@ class MalwareAnalyzer:
                 loaded_count = 0
                 for row in reader:
                     event_id = row['EventID'].strip()
+                    event_type = row.get('EventType', '').strip()  # NEW: Get event type from CSV
                     
                     # Parse indicators (semicolon separated)
                     indicators_str = row['Indicators'].strip()
@@ -93,8 +94,13 @@ class MalwareAnalyzer:
                     impact = int(row['Impact'].strip())
                     base_confidence = int(row['BaseConfidence'].strip())
                     
+                    # Create composite key: EventType:EventID (e.g., "Sysmon:1" or "Security:1102")
+                    composite_key = f"{event_type}:{event_id}" if event_type else event_id
+                    
                     # Create event entry
-                    self.malware_events[event_id] = {
+                    self.malware_events[composite_key] = {
+                        'event_type': event_type,  # NEW: Store event type
+                        'event_id': event_id,
                         'description': row['Description'].strip(),
                         'threat': row['Threat'].strip(),
                         'score': score,  # Keep CVSS for reference
@@ -102,7 +108,7 @@ class MalwareAnalyzer:
                         'base_confidence': base_confidence,  # NEW: 1-4 scale
                         'category': row['Category'].strip(),
                         'indicators': indicators,
-                        'type': indicator_type
+                        'type': indicator_type  # malware/breach/defender
                     }
                     loaded_count += 1
                 
@@ -110,6 +116,52 @@ class MalwareAnalyzer:
             
         except Exception as e:
             print(f"Error loading {indicator_type} CSV: {e}")
+    
+    def _event_matches_indicators(self, event, indicators, event_type, event_id):
+        """
+        Check if an event's data contains any of the threat indicators.
+        
+        For Security events: The Event ID itself is usually the indicator (e.g., 4625 = failed login)
+        For Sysmon events: Need to check actual data for specific strings (e.g., mimikatz.exe)
+        
+        Args:
+            event: Event dictionary with 'data' and 'basic_info' fields
+            indicators: List of indicator strings to search for
+            event_type: Type of event (Sysmon, Security, System, etc.)
+            event_id: Event ID number
+        
+        Returns:
+            bool: True if event matches the threat criteria
+        """
+        # For Security events, the Event ID itself is the indicator
+        # (e.g., Event 4625 = failed login attempt, 1102 = log cleared, etc.)
+        if event_type == "Security":
+            return True  # Match on Event Type:ID alone
+        
+        # For Sysmon and other events, check if data contains suspicious indicators
+        event_data = event.get('data', {})
+        basic_info = event.get('basic_info', {})
+        
+        # Combine all text values into a searchable string (lowercase for case-insensitive matching)
+        searchable_text = ""
+        
+        # Add all event data fields
+        for key, value in event_data.items():
+            if value:
+                searchable_text += f" {str(value).lower()}"
+        
+        # Add basic info fields (especially useful for provider names, channels, etc.)
+        for key, value in basic_info.items():
+            if value:
+                searchable_text += f" {str(value).lower()}"
+        
+        # Check if any indicator string appears in the event data
+        for indicator in indicators:
+            indicator_lower = indicator.lower().strip()
+            if indicator_lower in searchable_text:
+                return True
+        
+        return False
     
     def calculate_dynamic_confidence(self, event_id, base_confidence, count, timeline_data=None):
         """
@@ -235,60 +287,91 @@ class MalwareAnalyzer:
         highest_risk_priority = 1
         
         # Analyze each event ID found in the logs
-        for event_id, count in results['counts'].items():
-            if event_id in self.malware_events:
-                event_info = self.malware_events[event_id]
+        # Need to check by event type AND event ID AND indicator matching
+        all_events = []
+        all_events.extend(results.get('sysmon_events', []))
+        all_events.extend(results.get('security_events', []))
+        all_events.extend(results.get('system_events', []))
+        all_events.extend(results.get('application_events', []))
+        all_events.extend(results.get('windows_events', []))
+        
+        # Track matched events by composite key
+        matched_events = defaultdict(list)
+        
+        # Check each event against threat indicators
+        for event in all_events:
+            event_type = event.get('type', 'Unknown')
+            event_id = event.get('event_id')
+            composite_key = f"{event_type}:{event_id}"
+            
+            # Check if this event type:id combination has threat indicators
+            if composite_key in self.malware_events:
+                event_info = self.malware_events[composite_key]
+                indicators = event_info['indicators']
                 
-                # Get base values from CSV
-                impact = event_info['impact']
-                base_confidence = event_info['base_confidence']
-                
-                # Calculate dynamic confidence based on frequency and clustering
-                actual_confidence, boost_reasons = self.calculate_dynamic_confidence(
-                    event_id,
-                    base_confidence,
-                    count,
-                    timeline_data
-                )
-                
-                # Calculate matrix risk
-                matrix_risk = self.calculate_risk_from_matrix(impact, actual_confidence)
-                
-                # Track highest CVSS (for reference)
-                if event_info['score'] > highest_individual_score:
-                    highest_individual_score = event_info['score']
-                
-                # Track highest Impact and Confidence
-                if impact > highest_impact:
-                    highest_impact = impact
-                if actual_confidence > highest_confidence:
-                    highest_confidence = actual_confidence
-                
-                # Track highest risk level
-                risk_priority_value = risk_priority.get(matrix_risk, 0)
-                if risk_priority_value > highest_risk_priority:
-                    highest_risk = matrix_risk
-                    highest_risk_priority = risk_priority_value
-                
-                # Create indicator entry with matrix data
-                indicator = {
-                    'event_id': event_id,
-                    'description': event_info['description'],
-                    'threat': event_info['threat'],
-                    'count': count,
-                    'cvss_score': event_info['score'],  # Keep for reference
-                    'impact': impact,
-                    'base_confidence': base_confidence,
-                    'actual_confidence': actual_confidence,
-                    'confidence_boosted': actual_confidence > base_confidence,
-                    'boost_reasons': boost_reasons,  # NEW: List of boost reasons
-                    'matrix_risk': matrix_risk,
-                    'category': event_info['category'],
-                    'indicators_to_check': event_info['indicators']
-                }
-                
-                malware_indicators.append(indicator)
-                events_by_category[event_info['category']].append(indicator)
+                # Check if any indicator matches the event data
+                if self._event_matches_indicators(event, indicators, event_type, event_id):
+                    matched_events[composite_key].append(event)
+        
+        # Analyze matched events
+        for composite_key, matching_events in matched_events.items():
+            event_info = self.malware_events[composite_key]
+            count = len(matching_events)
+            
+            # Extract event_id from event_info
+            event_id = event_info['event_id']
+            
+            # Get base values from CSV
+            impact = event_info['impact']
+            base_confidence = event_info['base_confidence']
+            
+            # Calculate dynamic confidence based on frequency and clustering
+            actual_confidence, boost_reasons = self.calculate_dynamic_confidence(
+                event_id,
+                base_confidence,
+                count,
+                timeline_data
+            )
+            
+            # Calculate matrix risk
+            matrix_risk = self.calculate_risk_from_matrix(impact, actual_confidence)
+            
+            # Track highest CVSS (for reference)
+            if event_info['score'] > highest_individual_score:
+                highest_individual_score = event_info['score']
+            
+            # Track highest Impact and Confidence
+            if impact > highest_impact:
+                highest_impact = impact
+            if actual_confidence > highest_confidence:
+                highest_confidence = actual_confidence
+            
+            # Track highest risk level
+            risk_priority_value = risk_priority.get(matrix_risk, 0)
+            if risk_priority_value > highest_risk_priority:
+                highest_risk = matrix_risk
+                highest_risk_priority = risk_priority_value
+            
+            # Create indicator entry with matrix data
+            indicator = {
+                'event_id': event_id,
+                'event_type': event_info.get('event_type', 'Unknown'),
+                'description': event_info['description'],
+                'threat': event_info['threat'],
+                'count': count,
+                'cvss_score': event_info['score'],
+                'impact': impact,
+                'base_confidence': base_confidence,
+                'actual_confidence': actual_confidence,
+                'confidence_boosted': actual_confidence > base_confidence,
+                'boost_reasons': boost_reasons,
+                'matrix_risk': matrix_risk,
+                'category': event_info['category'],
+                'indicators_to_check': event_info['indicators']
+            }
+            
+            malware_indicators.append(indicator)
+            events_by_category[event_info['category']].append(indicator)
         
         # Sort indicators by risk level (Critical first), then by impact
         malware_indicators.sort(
