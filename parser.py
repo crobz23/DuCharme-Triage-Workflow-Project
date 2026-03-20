@@ -1,4 +1,4 @@
-# parser.py - Windows, Sysmon, and System.evtx support
+# parser.py - Windows, Sysmon, System.evtx, and Windows Defender support
 from Evtx.Evtx import Evtx
 from collections import Counter
 import xml.etree.ElementTree as ET
@@ -18,12 +18,16 @@ def parse_evtx(file_path):
                     events.append(root)
                 except ET.ParseError:
                     continue
+    except PermissionError:
+        # Re-raise permission errors so GUI can handle them
+        raise
     except Exception as e:
-        print(f"Error reading {file_path}: {e}")
+        # Silently fail for other errors - GUI will track them
+        pass
     return events
 
 def classify_event(root):
-    """Classify event type based on Channel and Provider (now supports System, Security, Application, etc.)."""
+    """Classify event type based on Channel and Provider (now supports System, Security, Application, Defender, etc.)."""
     # Get Channel
     channel_elem = root.find(".//ns:Channel", NS)
     channel = channel_elem.text.strip() if channel_elem is not None and channel_elem.text else ""
@@ -33,6 +37,8 @@ def classify_event(root):
     
     if "Sysmon" in provider_name or channel.startswith("Microsoft-Windows-Sysmon"):
         return "Sysmon", channel
+    elif "Defender" in provider_name or "Defender" in channel:
+        return "Defender", channel
     elif channel == "System":
         return "System", channel
     elif channel == "Security":
@@ -52,7 +58,7 @@ def extract_event_id(root):
 def extract_event_data(root):
     """
     Extract EventData (or UserData) fields into a dictionary.
-    Works for Sysmon, System.evtx, Security, Application, and most other Windows events.
+    Works for Sysmon, System.evtx, Security, Application, Windows Defender, and most other Windows events.
     """
     data = {}
     
@@ -72,42 +78,6 @@ def extract_event_data(root):
                 data[tag] = elem.text.strip()
     
     return data
-
-def map_build_to_windows_version(build_string):
-    """Map Windows build numbers to human-readable versions (from v4.0)."""
-    if not build_string:
-        return None
-    try:
-        parts = build_string.split('.')
-        if len(parts) < 2:
-            return f"Windows (Build {build_string})"
-        major = parts[0]
-        minor = parts[1]
-        build = parts[2] if len(parts) > 2 else "0"
-        if major == '10' and minor == '0':
-            build_num = int(build)
-            if build_num >= 22000:
-                return f"Windows 11 (Build {build})"
-            else:
-                return f"Windows 10 (Build {build})"
-        elif major == '6' and minor == '3':
-            return f"Windows 8.1 / Server 2012 R2 (Build {build})"
-        elif major == '6' and minor == '2':
-            return f"Windows 8 / Server 2012 (Build {build})"
-        elif major == '6' and minor == '1':
-            return f"Windows 7 / Server 2008 R2 (Build {build})"
-        elif major == '6' and minor == '0':
-            return f"Windows Vista / Server 2008 (Build {build})"
-        elif major == '5' and minor == '2':
-            return f"Windows Server 2003 (Build {build})"
-        elif major == '5' and minor == '1':
-            return f"Windows XP (Build {build})"
-        else:
-            return f"Windows {major}.{minor} (Build {build})"
-    except:
-        return f"Windows (Build {build_string})"
-
-
 
 def extract_basic_info(root):
     """Extract commonly useful fields from the <System> section."""
@@ -167,10 +137,45 @@ def extract_basic_info(root):
             "level": "",
         }
 
+def map_build_to_windows_version(build_string):
+    """Map Windows build numbers to human-readable versions."""
+    if not build_string:
+        return None
+    try:
+        parts = build_string.split('.')
+        if len(parts) < 2:
+            return f"Windows (Build {build_string})"
+        major = parts[0]
+        minor = parts[1]
+        build = parts[2] if len(parts) > 2 else "0"
+        if major == '10' and minor == '0':
+            build_num = int(build)
+            if build_num >= 22000:
+                return f"Windows 11 (Build {build})"
+            else:
+                return f"Windows 10 (Build {build})"
+        elif major == '6' and minor == '3':
+            return f"Windows 8.1 / Server 2012 R2 (Build {build})"
+        elif major == '6' and minor == '2':
+            return f"Windows 8 / Server 2012 (Build {build})"
+        elif major == '6' and minor == '1':
+            return f"Windows 7 / Server 2008 R2 (Build {build})"
+        elif major == '6' and minor == '0':
+            return f"Windows Vista / Server 2008 (Build {build})"
+        elif major == '5' and minor == '2':
+            return f"Windows Server 2003 (Build {build})"
+        elif major == '5' and minor == '1':
+            return f"Windows XP (Build {build})"
+        else:
+            return f"Windows {major}.{minor} (Build {build})"
+    except:
+        return f"Windows (Build {build_string})"
+
+
 def analyze_events(events):
     """
-    Analyze events with full support for System.evtx.
-    Returns categorized events + statistics, including os_version (v4.0 approach).
+    Analyze events with full support for System.evtx and Windows Defender logs.
+    Returns categorized events + statistics, including os_version and computer_name.
     """
     import re
     event_ids = []
@@ -178,6 +183,7 @@ def analyze_events(events):
     system_events = []
     security_events = []
     application_events = []
+    defender_events = []
     other_windows_events = []
 
     os_version = None
@@ -198,8 +204,8 @@ def analyze_events(events):
         if not computer_name and basic_info.get('computer'):
             computer_name = basic_info['computer']
 
-        # === OS DETECTION (v4.0 approach) ===
-        # EID 6009: Data[0]=major.minor, Data[1]=build (unnamed Data elements)
+        # === OS DETECTION ===
+        # EID 6009: Data[0]=major.minor, Data[1]=build
         if eid == '6009' and not os_version:
             try:
                 data_elements = root.findall(".//ns:EventData/ns:Data", NS)
@@ -220,8 +226,7 @@ def analyze_events(events):
         # EID 6005/6006/1074: try regex on full XML text
         if eid in ['6005', '6006', '1074'] and not os_version:
             try:
-                import xml.etree.ElementTree as _ET
-                event_xml = _ET.tostring(root, encoding='unicode')
+                event_xml = ET.tostring(root, encoding='unicode')
                 vm = re.search(r'Microsoft Windows.*?(\d+\.\d+\.\d+)', event_xml, re.IGNORECASE)
                 if not vm:
                     vm = re.search(r'(?:Version|Build).*?(\d+\.\d+\.\d+)', event_xml, re.IGNORECASE)
@@ -253,7 +258,7 @@ def analyze_events(events):
             'data': event_data,
             'root': root
         }
-
+        
         if event_type == "Sysmon":
             sysmon_events.append(event_entry)
         elif event_type == "System":
@@ -262,9 +267,11 @@ def analyze_events(events):
             security_events.append(event_entry)
         elif event_type == "Application":
             application_events.append(event_entry)
+        elif event_type == "Defender":
+            defender_events.append(event_entry)
         else:
             other_windows_events.append(event_entry)
-
+    
     counts = Counter(event_ids)
 
     if not os_version and system_events:
@@ -277,18 +284,19 @@ def analyze_events(events):
         'system_events': system_events,
         'security_events': security_events,
         'application_events': application_events,
+        'defender_events': defender_events,
         'windows_events': other_windows_events,
         'total_events': len(events),
         'total_sysmon': len(sysmon_events),
         'total_system': len(system_events),
         'total_security': len(security_events),
         'total_application': len(application_events),
+        'total_defender': len(defender_events),
         'total_other_windows': len(other_windows_events),
         'os_version': os_version,
         'os_build': os_build,
         'computer_name': computer_name,
     }
-
 
 # ==================== Testing ====================
 def main():
@@ -306,11 +314,12 @@ def main():
     results = analyze_events(all_events)
     
     print(f"Parsed {results['total_events']} total events from {', '.join(file_paths)}")
-    print(f"  - Sysmon Events     : {results['total_sysmon']}")
-    print(f"  - System Events     : {results['total_system']}")
-    print(f"  - Security Events   : {results['total_security']}")
-    print(f"  - Application Events: {results['total_application']}")
-    print(f"  - Other Windows     : {results['total_other_windows']}")
+    print(f"  - Sysmon Events         : {results['total_sysmon']}")
+    print(f"  - System Events         : {results['total_system']}")
+    print(f"  - Security Events       : {results['total_security']}")
+    print(f"  - Application Events    : {results['total_application']}")
+    print(f"  - Windows Defender Events: {results['total_defender']}")
+    print(f"  - Other Windows         : {results['total_other_windows']}")
     
     print("\n=== Top 15 Event ID Counts ===")
     for eid, count in results['counts'].most_common(15):
@@ -325,45 +334,5 @@ def main():
             for k, v in list(event['data'].items())[:8]:   # limit output
                 print(f"  {k}: {v}")
 
-def debug_os_detection(file_paths):
-    """
-    Print raw XML of EID 6013 and OS detection results.
-    Run with: python parser.py --debug-os <evtx_file(s)>
-    """
-    import xml.etree.ElementTree as ET
-    print("=== OS DETECTION DEBUG ===\n")
-    for file_path in file_paths:
-        print(f"File: {file_path}")
-        events = parse_evtx(file_path)
-        found_6013 = False
-        for root in events:
-            eid = extract_event_id(root)
-            if eid == '6013':
-                found_6013 = True
-                print(f"\n--- Raw XML of EID 6013 ---")
-                print(ET.tostring(root, encoding='unicode')[:3000])
-                print(f"\n--- extract_event_data result ---")
-                data = extract_event_data(root)
-                for k, v in data.items():
-                    print(f"  {k}: {v}")
-                print(f"\n--- extract_os_version result ---")
-                result = extract_os_version(root, '6013')
-                print(f"  OS Version: {result}")
-                break
-        if not found_6013:
-            print("  No EID 6013 found in this file")
-            # Print first system event instead
-            for root in events:
-                eid = extract_event_id(root)
-                event_type, _ = classify_event(root)
-                if event_type == "System":
-                    print(f"\n--- First System event (EID {eid}) raw XML ---")
-                    print(ET.tostring(root, encoding='unicode')[:2000])
-                    break
-
-
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == '--debug-os':
-        debug_os_detection(sys.argv[2:])
-    else:
-        main()
+    main()
