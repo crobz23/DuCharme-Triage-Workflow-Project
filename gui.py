@@ -4,6 +4,20 @@ from tkinter import filedialog, scrolledtext, messagebox
 from tkinter import ttk
 import os
 
+# Log files supported by the parser. When scanning a directory only these
+# files will be loaded — everything else is ignored.
+SUPPORTED_LOG_NAMES = {
+    'security.evtx',
+    'system.evtx',
+    'microsoft-windows-sysmon%4operational.evtx',
+    'microsoft-windows-windows defender%4operational.evtx',
+}
+
+def _is_supported_log(filename):
+    """Return True if the filename matches a supported log."""
+    return filename.lower() in SUPPORTED_LOG_NAMES
+
+
 class TriageToolGUI:
     def __init__(self, root):
         self.root = root
@@ -21,8 +35,39 @@ class TriageToolGUI:
         self.selected_event_ids = []
         self.filter_search_var = tk.StringVar()
         
+        # Time filter variables
+        self.time_filter_active = False
+        self.time_filter_start = None
+        self.time_filter_end = None
+        
+        # Remember last time filter values
+        self.last_from_month = 1
+        self.last_from_day = 1
+        self.last_from_year = 2026
+        self.last_from_hour = 0
+        self.last_from_minute = 0
+        self.last_to_month = 1
+        self.last_to_day = 1
+        self.last_to_year = 2026
+        self.last_to_hour = 23
+        self.last_to_minute = 59
+        
+        # Store original unfiltered results
+        self.original_results = None
+        self.original_malware_analysis = None
+        self.original_timeline_data = None
+        
         # Create GUI elements
         self.create_widgets()
+    
+    def safe_sort_event_ids(self, event_ids):
+        """Safely sort event IDs, handling 'Unknown' and other non-numeric values"""
+        def sort_key(x):
+            try:
+                return (0, int(x))  # Numeric IDs come first, sorted numerically
+            except (ValueError, TypeError):
+                return (1, x)  # Non-numeric IDs come last, sorted alphabetically
+        return sorted(event_ids, key=sort_key)
         
     def create_widgets(self):
         # Header Frame
@@ -74,6 +119,23 @@ class TriageToolGUI:
         )
         browse_dir_btn.pack(side=tk.LEFT, padx=(10, 0))
         
+        # Default Windows Logs Section
+        default_logs_frame = tk.LabelFrame(main_frame, text="Or Select Default Windows Log Location", padx=10, pady=10)
+        default_logs_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Default Windows Logs button
+        default_logs_btn = tk.Button(
+            default_logs_frame,
+            text="📁 Default Windows Logs",
+            command=self.load_default_windows_logs,
+            bg="white",
+            fg="#374151",
+            relief=tk.RAISED,
+            padx=15,
+            pady=8
+        )
+        default_logs_btn.pack(side=tk.LEFT)
+        
         # Control Frame (Analyze + Filter)
         control_frame = tk.Frame(main_frame)
         control_frame.pack(fill=tk.X, pady=(0, 10))
@@ -103,7 +165,21 @@ class TriageToolGUI:
             pady=10,
             state=tk.DISABLED
         )
-        self.filter_btn.pack(side=tk.LEFT)
+        self.filter_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Time Filtering Button
+        self.time_filter_btn = tk.Button(
+            control_frame,
+            text="📅 Time Filtering",
+            command=self.open_time_filter_dialog,
+            bg="white",
+            fg="#374151",
+            relief=tk.RAISED,
+            padx=15,
+            pady=10,
+            state=tk.DISABLED
+        )
+        self.time_filter_btn.pack(side=tk.LEFT)
         
         # Filter badge (shows count of selected filters)
         self.filter_badge = tk.Label(
@@ -137,16 +213,16 @@ class TriageToolGUI:
         button_frame = tk.Frame(main_frame)
         button_frame.pack(fill=tk.X)
         
-        # Clear filter button
-        self.clear_filter_btn = tk.Button(
+        # Clear Filters button (combines Event ID filter and Time filter)
+        self.clear_filters_btn = tk.Button(
             button_frame,
-            text="Clear Filter",
-            command=self.clear_filter,
+            text="Clear Filters",
+            command=self.clear_all_filters,
             padx=15,
             pady=5,
             state=tk.DISABLED
         )
-        self.clear_filter_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.clear_filters_btn.pack(side=tk.LEFT, padx=(0, 10))
         
         # Clear results button
         clear_btn = tk.Button(
@@ -219,12 +295,60 @@ class TriageToolGUI:
 
         # Determine list of files to analyze
         if isinstance(self.selected_file, list):
+            # Already a list of files from browse_directory
             files_to_analyze = self.selected_file
             for f in files_to_analyze:
                 if not os.path.exists(f):
                     messagebox.showerror("File Not Found", f"The file does not exist:\n{f}")
                     return
+        elif os.path.isdir(self.selected_file):
+            # It's a directory path (from Default Windows Logs)
+            try:
+                evtx_files = [
+                    os.path.join(self.selected_file, f)
+                    for f in os.listdir(self.selected_file)
+                    if _is_supported_log(f)
+                ]
+                if not evtx_files:
+                    self.results_text.config(state=tk.NORMAL)
+                    self.results_text.delete(1.0, tk.END)
+                    self.results_text.insert(tk.END, f"Error: No supported .evtx files found in:\n{self.selected_file}")
+                    self.results_text.config(state=tk.DISABLED)
+                    messagebox.showwarning("No Files Found", f"No supported .evtx files found in:\n{self.selected_file}")
+                    return
+                files_to_analyze = evtx_files
+            except PermissionError as e:
+                error_msg = (
+                    f"Permission Denied - Administrator Required\n\n"
+                    f"Cannot access Windows logs folder:\n{self.selected_file}\n\n"
+                    f"Error: {str(e)}\n\n"
+                    f"To access system logs:\n"
+                    f"1. Close this program\n"
+                    f"2. Right-click the executable\n"
+                    f"3. Select 'Run as administrator'\n\n"
+                    f"Alternative:\n"
+                    f"Export logs from Event Viewer:\n"
+                    f"- Open Event Viewer (eventvwr.msc)\n"
+                    f"- Right-click a log → 'Save All Events As...'\n"
+                    f"- Save as .evtx file\n"
+                    f"- Use 'Browse File' to select the exported file"
+                )
+                self.results_text.config(state=tk.NORMAL)
+                self.results_text.delete(1.0, tk.END)
+                self.results_text.insert(tk.END, error_msg)
+                self.results_text.config(state=tk.DISABLED)
+                messagebox.showerror("Permission Denied", error_msg)
+                return
+            except Exception as e:
+                error_msg = f"Error accessing directory:\n{self.selected_file}\n\nError: {str(e)}"
+                self.results_text.config(state=tk.NORMAL)
+                self.results_text.delete(1.0, tk.END)
+                self.results_text.insert(tk.END, error_msg)
+                self.results_text.config(state=tk.DISABLED)
+                messagebox.showerror("Error", error_msg)
+                return
         else:
+            # Single file path
             if not os.path.exists(self.selected_file):
                 messagebox.showerror("File Not Found", "The selected file does not exist.")
                 return
@@ -241,17 +365,63 @@ class TriageToolGUI:
             from parser import parse_evtx, analyze_events
 
             all_events = []
+            successful_files = 0
+            failed_files = []
+            
             for filepath in files_to_analyze:
-                file_events = parse_evtx(filepath)
-                if file_events:
-                    all_events.extend(file_events)
+                try:
+                    file_events = parse_evtx(filepath)
+                    if file_events:
+                        all_events.extend(file_events)
+                        successful_files += 1
+                    else:
+                        failed_files.append((filepath, "No events parsed"))
+                except PermissionError:
+                    failed_files.append((filepath, "Permission denied"))
+                except Exception as e:
+                    failed_files.append((filepath, str(e)))
 
             events = all_events
             
+            # Show parsing summary if there were failures
+            if failed_files:
+                self.results_text.insert(tk.END, f"\nParsing Summary:\n")
+                self.results_text.insert(tk.END, f"  Successfully parsed: {successful_files} file(s)\n")
+                self.results_text.insert(tk.END, f"  Failed to parse: {len(failed_files)} file(s)\n\n")
+            
             if not events:
-                self.results_text.insert(tk.END, "\nError: No events found or file could not be parsed.\n")
+                if failed_files:
+                    self.results_text.insert(tk.END, f"\nPermission Denied - Administrator Required\n")
+                    self.results_text.insert(tk.END, f"=" * 60 + "\n\n")
+                    self.results_text.insert(tk.END, f"Cannot access Windows logs folder:\n")
+                    
+                    # Get the directory path if it's a directory
+                    if len(files_to_analyze) > 0 and os.path.dirname(files_to_analyze[0]):
+                        dir_path = os.path.dirname(files_to_analyze[0])
+                        self.results_text.insert(tk.END, f"{dir_path}\n\n")
+                    
+                    self.results_text.insert(tk.END, f"Error: No events could be parsed from any files.\n")
+                    self.results_text.insert(tk.END, f"Reason: Permission denied on {len(failed_files)} file(s)\n\n")
+                    
+                    self.results_text.insert(tk.END, f"To access system logs:\n")
+                    self.results_text.insert(tk.END, f"1. Close this program\n")
+                    self.results_text.insert(tk.END, f"2. Right-click the executable\n")
+                    self.results_text.insert(tk.END, f"3. Select 'Run as administrator'\n\n")
+                    
+                    self.results_text.insert(tk.END, f"Alternative:\n")
+                    self.results_text.insert(tk.END, f"Export logs from Event Viewer:\n")
+                    self.results_text.insert(tk.END, f"- Open Event Viewer (eventvwr.msc)\n")
+                    self.results_text.insert(tk.END, f"- Right-click a log → 'Save All Events As...'\n")
+                    self.results_text.insert(tk.END, f"- Save as .evtx file\n")
+                    self.results_text.insert(tk.END, f"- Use 'Browse File' to select the exported file\n")
+                else:
+                    self.results_text.insert(tk.END, "\nError: No events found or file could not be parsed.\n")
                 self.results_text.config(state=tk.DISABLED)
                 return
+            
+            # Continue with analysis if we have events
+            self.results_text.insert(tk.END, f"\nProceeding with {len(events)} events from {successful_files} file(s)...\n")
+            self.results_text.update()
             
             # Analyze events
             self.all_results = analyze_events(events)
@@ -273,12 +443,18 @@ class TriageToolGUI:
             # Run malware analysis with timeline data for confidence boosting
             self.malware_analysis = analyze_malware(self.all_results, self.timeline_data)
             
+            # Store original unfiltered results for time filtering
+            self.original_results = self.all_results
+            self.original_malware_analysis = self.malware_analysis
+            self.original_timeline_data = self.timeline_data
+            
             # Extract available Event IDs and enable filter and report button
-            self.available_event_ids = sorted(self.all_results['counts'].keys(), key=lambda x: int(x))
+            self.available_event_ids = self.safe_sort_event_ids(self.all_results['counts'].keys())
             self.selected_event_ids = []
             self.filter_btn.config(state=tk.NORMAL)
+            self.time_filter_btn.config(state=tk.NORMAL)  # Enable time filter
             self.report_btn.config(state=tk.NORMAL)
-            self.clear_filter_btn.config(state=tk.DISABLED)
+            self.clear_filters_btn.config(state=tk.DISABLED)
             self.update_filter_badge()
             
             # Generate and display results (including malware analysis and timeline)
@@ -296,7 +472,7 @@ class TriageToolGUI:
             self.results_text.config(state=tk.DISABLED)
             messagebox.showerror("Analysis Error", f"An error occurred:\n{str(e)}")
     
-    def get_event_description(self, event_id):
+    def get_event_description(self, event_id, prefer_sysmon=False):
         """Get description for a given Event ID"""
         # Windows Security Event IDs
         windows_events = {
@@ -343,7 +519,7 @@ class TriageToolGUI:
         '7036': 'A service entered running or stopped state',
         '7040': 'A service startup type was changed',
         '7045': 'A new service was installed',
-        # Security/Application Event IDs (technical format)
+        # Security Event IDs (technical format)
         '4103': 'A PowerShell script was executed',
         '4104': 'A PowerShell command was executed',
         '4105': 'A PowerShell script started',
@@ -434,13 +610,17 @@ class TriageToolGUI:
             '29': 'An executable file was detected',
         }
         
-        # Check both dictionaries
-        if event_id in windows_events:
-            return windows_events[event_id]
-        elif event_id in sysmon_events:
-            return sysmon_events[event_id]
+        # Check both dictionaries, preferring Sysmon if the event came from that channel
+        if prefer_sysmon:
+            if event_id in sysmon_events:
+                return sysmon_events[event_id]
+            elif event_id in windows_events:
+                return windows_events[event_id]
         else:
-            return "An event was recorded"
+            if event_id in windows_events:
+                return windows_events[event_id]
+            # Do NOT fall back to Sysmon descriptions for Windows channel events
+        return "An event was recorded"
     
     def open_filter_dialog(self):
         """Open Event ID filter dialog"""
@@ -582,29 +762,40 @@ class TriageToolGUI:
         
         # Create checkboxes for each Event ID
         checkboxes = {}
-        
+
+        sysmon_counts = {}
+        for event in (self.all_results.get('sysmon_events', []) if self.all_results else []):
+            eid = event.get('event_id', '')
+            sysmon_counts[eid] = sysmon_counts.get(eid, 0) + 1
+
         for event_id in self.available_event_ids:
             var = tk.BooleanVar(value=(event_id in self.selected_event_ids))
             check_vars[event_id] = var
-            
-            # Get description for this event
-            description = self.get_event_description(event_id)
-            
+
+            # Get description for this event, using Sysmon descriptions where appropriate
+            description = self.get_event_description(event_id, prefer_sysmon=(event_id in sysmon_counts))
+
+            # Annotate only if this ID actually came from the Sysmon channel
+            if event_id in sysmon_counts:
+                label_text = f"Event ID {event_id} (Sysmon)"
+            else:
+                label_text = f"Event ID {event_id}"
+
             # Create a frame for each checkbox + description
             cb_frame = tk.Frame(scrollable_frame, bg="white")
             cb_frame.pack(anchor='w', padx=10, pady=5, fill=tk.X)
-            
+
             # Checkbox with event ID
             cb = tk.Checkbutton(
                 cb_frame,
-                text=f"Event ID {event_id}",
+                text=label_text,
                 variable=var,
                 font=("Arial", 10, "bold"),
                 anchor='w',
                 bg="white"
             )
             cb.pack(anchor='w', fill=tk.X)
-            
+
             # Description label
             desc_label = tk.Label(
                 cb_frame,
@@ -615,7 +806,7 @@ class TriageToolGUI:
                 anchor='w'
             )
             desc_label.pack(anchor='w', padx=(22, 0))
-            
+
             checkboxes[event_id] = cb_frame  # Store the frame instead of just checkbox
         
         # Filter function - COMPLETELY FIXED VERSION
@@ -631,8 +822,8 @@ class TriageToolGUI:
                     search_term = ""
                 
                 for event_id, cb_frame in checkboxes.items():
-                    # Get description for searching
-                    description = self.get_event_description(event_id)
+                    # Get description using correct channel
+                    description = self.get_event_description(event_id, prefer_sysmon=(event_id in sysmon_counts))
                     
                     # Search in both event ID and description
                     if (search_term.lower() in event_id.lower() or 
@@ -722,30 +913,128 @@ class TriageToolGUI:
         # Don't auto-focus search - let user interact with checkboxes freely
     
     def apply_event_filter(self):
-        """Apply Event ID filter to results"""
+        """Apply Event ID filter, stacking on top of any active time filter."""
         if not self.all_results:
             return
-        
+
+        base_results = self.all_results
+        display_path = self.selected_file if isinstance(self.selected_file, str) else f"{len(self.selected_file)} files from directory"
+
         if not self.selected_event_ids:
-            output = self.generate_results(self.selected_file, self.all_results)
-            # Add timeline and malware analysis sections when showing full results
+            output = self.generate_results(display_path, base_results)
             output += self.generate_timeline_summary(self.timeline_data)
             output += self.generate_malware_summary(self.malware_analysis)
-            self.clear_filter_btn.config(state=tk.DISABLED)
         else:
-            output = self.generate_filtered_results(self.selected_file, self.all_results, self.selected_event_ids)
-            self.clear_filter_btn.config(state=tk.NORMAL)
-        
+            output = self.generate_filtered_results(display_path, base_results, self.selected_event_ids)
+
+        # Prepend time filter header if time filter is also active
+        if self.time_filter_active:
+            from datetime import datetime
+            try:
+                start_formatted = datetime.fromisoformat(self.time_filter_start.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
+                end_formatted = datetime.fromisoformat(self.time_filter_end.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
+            except:
+                start_formatted = self.time_filter_start
+                end_formatted = self.time_filter_end
+            header = f"\n{'=' * 60}\n"
+            header += f"TIME FILTERED RESULTS\n"
+            header += f"{'=' * 60}\n"
+            header += f"Time Range: {start_formatted} to {end_formatted}\n"
+            header += f"Filtered Events: {base_results['total_events']} of {self.original_results['total_events']} original events\n"
+            header += f"{'=' * 60}\n\n"
+            output = header + output
+
         self.results_text.config(state=tk.NORMAL)
         self.results_text.delete(1.0, tk.END)
         self.results_text.insert(tk.END, output)
         self.results_text.config(state=tk.DISABLED)
-    
+
+        self.update_clear_filters_button()
+
+
     def clear_filter(self):
         """Clear Event ID filter"""
         self.selected_event_ids = []
         self.update_filter_badge()
         self.apply_event_filter()
+    
+    def clear_time_filter(self):
+        """Clear time filter and restore original results"""
+        if not self.time_filter_active:
+            return
+        
+        # Restore original results
+        self.all_results = self.original_results
+        self.malware_analysis = self.original_malware_analysis
+        self.timeline_data = self.original_timeline_data
+        
+        # Update available event IDs
+        self.available_event_ids = self.safe_sort_event_ids(self.original_results['counts'].keys())
+        
+        # Clear time filter state
+        self.time_filter_active = False
+        self.time_filter_start = None
+        self.time_filter_end = None
+        
+        # Update button states
+        self.time_filter_btn.config(text="📅 Time Filtering")
+        self.update_clear_filters_button()
+        
+        # Re-display — respect any active event ID filter
+        display_path = self.selected_file if isinstance(self.selected_file, str) else f"{len(self.selected_file)} files from directory"
+        if self.selected_event_ids:
+            output = self.generate_filtered_results(display_path, self.original_results, self.selected_event_ids)
+        else:
+            output = self.generate_results(display_path, self.original_results)
+            output += self.generate_timeline_summary(self.original_timeline_data)
+            output += self.generate_malware_summary(self.original_malware_analysis)
+        
+        self.results_text.config(state=tk.NORMAL)
+        self.results_text.delete(1.0, tk.END)
+        self.results_text.insert(tk.END, output)
+        self.results_text.config(state=tk.DISABLED)
+        
+        messagebox.showinfo("Time Filter Cleared", "Restored all events from original analysis.")
+    
+    def clear_all_filters(self):
+        """Clear both Event ID filter and Time filter"""
+        # Clear time filter if active
+        if self.time_filter_active:
+            self.time_filter_active = False
+            self.time_filter_start = None
+            self.time_filter_end = None
+            self.time_filter_btn.config(text="📅 Time Filtering")
+            
+            # Restore original results
+            self.all_results = self.original_results
+            self.malware_analysis = self.original_malware_analysis
+            self.timeline_data = self.original_timeline_data
+            self.available_event_ids = self.safe_sort_event_ids(self.original_results['counts'].keys())
+        
+        # Clear Event ID filter
+        self.selected_event_ids = []
+        self.update_filter_badge()
+        
+        # Re-display full results
+        display_path = self.selected_file if isinstance(self.selected_file, str) else f"{len(self.selected_file)} files from directory"
+        output = self.generate_results(display_path, self.all_results)
+        output += self.generate_timeline_summary(self.timeline_data)
+        output += self.generate_malware_summary(self.malware_analysis)
+        
+        self.results_text.config(state=tk.NORMAL)
+        self.results_text.delete(1.0, tk.END)
+        self.results_text.insert(tk.END, output)
+        self.results_text.config(state=tk.DISABLED)
+        
+        # Update button state
+        self.update_clear_filters_button()
+    
+    def update_clear_filters_button(self):
+        """Enable/disable Clear Filters button based on whether any filters are active"""
+        if self.time_filter_active or self.selected_event_ids:
+            self.clear_filters_btn.config(state=tk.NORMAL)
+        else:
+            self.clear_filters_btn.config(state=tk.DISABLED)
     
     def update_filter_badge(self):
         """Update filter badge display"""
@@ -763,19 +1052,32 @@ class TriageToolGUI:
         import os
         from datetime import datetime
         
-        file_size = os.path.getsize(file_path) / 1024
+        # Handle both single file and directory/multiple files
+        if isinstance(file_path, list):
+            file_size = sum(os.path.getsize(f) / 1024 for f in file_path if os.path.isfile(f))
+            file_name = f"{len(file_path)} files from directory"
+            path_display = file_name
+        elif isinstance(file_path, str) and os.path.isfile(file_path):
+            file_size = os.path.getsize(file_path) / 1024
+            file_name = os.path.basename(file_path)
+            path_display = file_path
+        else:
+            # Display string like "4 files from directory"
+            file_size = None
+            file_name = file_path
+            path_display = file_path
         
         filtered_counts = {eid: count for eid, count in results['counts'].items() if eid in selected_ids}
         filtered_total = sum(filtered_counts.values())
         
-        output = f"""Analysis Results for: {os.path.basename(file_path)}
+        output = f"""Analysis Results for: {file_name}
 {"=" * 60}
 🔍 FILTERED VIEW - Showing {len(selected_ids)} Event ID(s)
 
 File Information:
-- File Name: {os.path.basename(file_path)}
-- File Path: {file_path}
-- File Size: {file_size:.2f} KB
+- File Name: {file_name}
+- File Path: {path_display}
+- File Size: {f"{file_size:.2f} KB" if file_size is not None else "Multiple files"}
 - Analysis Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 Filter Summary:
@@ -787,8 +1089,18 @@ Filtered Event ID Breakdown:
 {"=" * 60}
 """
         
-        for eid in sorted(filtered_counts.keys(), key=lambda x: int(x)):
-            output += f"Event ID {eid}: {filtered_counts[eid]} occurrences\n"
+        sysmon_counts = {}
+        for event in results.get('sysmon_events', []):
+            eid = event.get('event_id', '')
+            sysmon_counts[eid] = sysmon_counts.get(eid, 0) + 1
+
+        for eid in self.safe_sort_event_ids(filtered_counts.keys()):
+            count = filtered_counts[eid]
+            if eid in sysmon_counts:
+                label = f"Event ID {eid} (Sysmon): {count} occurrences\n"
+            else:
+                label = f"Event ID {eid}: {count} occurrences\n"
+            output += label
         
         if not filtered_counts:
             output += "No events match the selected filter.\n"
@@ -833,38 +1145,29 @@ Event Summary:
 - Sysmon Events: {results['total_sysmon']}
 - Security Events: {results['total_security']}
 - System Events: {results['total_system']}
-- Application Events: {results['total_application']}
-- Other Windows Events: {results['total_other_windows']}
+- Windows Defender Events: {results['total_defender']}
 - Unique Event IDs Found: {len(results['counts'])}
 
 Event ID Breakdown:
 {"=" * 60}
 """
         
-        for eid in sorted(results['counts'].keys(), key=lambda x: int(x)):
-            output += f"Event ID {eid}: {results['counts'][eid]} occurrences\n"
-        
-        # Removed "Critical Windows Events Found" section - redundant with threat analysis
-        
-        if results['total_sysmon'] > 0:
-            common_sysmon_ids = {
-                '1': 'Process Creation',
-                '2': 'File Creation Time Changed',
-                '3': 'Network Connection',
-                '5': 'Process Terminated',
-                '7': 'Image Loaded',
-                '8': 'CreateRemoteThread',
-                '10': 'Process Access',
-                '11': 'File Created',
-                '13': 'Registry Value Set'
-            }
-            
-            output += f"\n{'=' * 60}\nSysmon Events Found:\n{'=' * 60}\n"
-            
-            for eid, description in common_sysmon_ids.items():
-                if eid in results['counts']:
-                    output += f"🔍 Sysmon Event ID {eid} ({description}): {results['counts'][eid]} occurrences\n"
-        
+        # Build a set of event IDs that actually came from the Sysmon channel.
+        # This is accurate regardless of ID range — avoids false (Sysmon) tags
+        # on Windows System IDs that happen to share the same number.
+        sysmon_counts = {}
+        for event in results.get('sysmon_events', []):
+            eid = event.get('event_id', '')
+            sysmon_counts[eid] = sysmon_counts.get(eid, 0) + 1
+
+        for eid in self.safe_sort_event_ids(results['counts'].keys()):
+            count = results['counts'][eid]
+            if eid in sysmon_counts:
+                label = f"Event ID {eid} (Sysmon): {count} occurrences\n"
+            else:
+                label = f"Event ID {eid}: {count} occurrences\n"
+            output += label
+
         output += f"\n{'=' * 60}\n"
         output += "Analysis Complete.\n"
         output += "Use 'Filter by Event ID' button to view specific events.\n"
@@ -983,10 +1286,466 @@ Event ID Breakdown:
         self.timeline_data = None
         self.available_event_ids = []
         self.selected_event_ids = []
+        
+        # Reset time filter state
+        self.time_filter_active = False
+        self.time_filter_start = None
+        self.time_filter_end = None
+        self.original_results = None
+        self.original_malware_analysis = None
+        self.original_timeline_data = None
+        
+        # Disable buttons
         self.filter_btn.config(state=tk.DISABLED)
+        self.time_filter_btn.config(state=tk.DISABLED, text="📅 Time Filtering")
         self.report_btn.config(state=tk.DISABLED)
-        self.clear_filter_btn.config(state=tk.DISABLED)
+        self.clear_filters_btn.config(state=tk.DISABLED)
         self.update_filter_badge()
+    
+    def load_default_windows_logs(self):
+        """Load default Windows event logs location"""
+        default_path = r"C:\Windows\System32\winevt\Logs"
+        
+        if not os.path.exists(default_path):
+            messagebox.showerror(
+                "Path Not Found",
+                f"Default Windows logs path not found:\n{default_path}\n\nThis feature requires Windows OS."
+            )
+            return
+        
+        try:
+            # Only load supported log files
+            files = [f for f in os.listdir(default_path) if _is_supported_log(f)]
+            if not files:
+                messagebox.showwarning(
+                    "No Supported Files Found",
+                    f"No supported log files found in:\n{default_path}\n\n"
+                    "The tool scans for:\n"
+                    "  • Security.evtx\n"
+                    "  • System.evtx\n"
+                    "  • Microsoft-Windows-Sysmon%4Operational.evtx\n"
+                    "  • Microsoft-Windows-Windows Defender%4Operational.evtx"
+                )
+                return
+
+            self.selected_file = [os.path.join(default_path, f) for f in files]
+            self.file_path.set(f"{default_path} ({len(files)} .evtx file(s))")
+            messagebox.showinfo(
+                "Windows Logs Loaded",
+                f"Loaded default Windows logs location:\n{default_path}\n\nFound {len(files)} log file(s).\n\nClick 'Analyze' to process."
+            )
+        except PermissionError:
+            messagebox.showerror(
+                "Permission Denied - Administrator Required",
+                "Cannot access Windows logs folder.\n\n"
+                "To access system logs, you must:\n"
+                "1. Close this program\n"
+                "2. Right-click the program executable\n"
+                "3. Select 'Run as administrator'\n\n"
+                "Alternative:\n"
+                "Export logs from Event Viewer and use 'Browse File' instead:\n"
+                "- Open Event Viewer (eventvwr.msc)\n"
+                "- Right-click a log → 'Save All Events As...'\n"
+                "- Save as .evtx file\n"
+                "- Use Browse to select the exported file"
+            )
+        except Exception as e:
+            messagebox.showerror(
+                "Error",
+                f"Error accessing Windows logs:\n{str(e)}\n\n"
+                "Try running as Administrator or export logs manually from Event Viewer."
+            )
+    
+    def open_time_filter_dialog(self):
+        """Open Time Filtering dialog with quick presets and custom date range"""
+        if not self.all_results:
+            messagebox.showwarning("No Data", "Please analyze a log file first.")
+            return
+        
+        # Create dialog window
+        time_dialog = tk.Toplevel(self.root)
+        time_dialog.title("Time Filtering")
+        time_dialog.geometry("600x550")
+        time_dialog.resizable(False, False)
+        time_dialog.transient(self.root)
+        time_dialog.grab_set()
+        
+        # Center the dialog
+        time_dialog.update_idletasks()
+        x = (time_dialog.winfo_screenwidth() // 2) - (600 // 2)
+        y = (time_dialog.winfo_screenheight() // 2) - (550 // 2)
+        time_dialog.geometry(f"+{x}+{y}")
+        
+        # Main frame
+        main_frame = tk.Frame(time_dialog, padx=20, pady=20, bg="white")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Title
+        title_label = tk.Label(
+            main_frame,
+            text="Select Time Window",
+            font=("Arial", 14, "bold"),
+            bg="white"
+        )
+        title_label.pack(pady=(0, 20))
+        
+        # Quick filters section
+        quick_frame = tk.LabelFrame(main_frame, text="Quick Filters", padx=15, pady=15, bg="white")
+        quick_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        quick_btn_frame = tk.Frame(quick_frame, bg="white")
+        quick_btn_frame.pack()
+        
+        tk.Button(quick_btn_frame, text="Last 24 Hours", command=lambda: apply_quick_filter(24), 
+                 width=15, pady=5).pack(side=tk.LEFT, padx=5)
+        tk.Button(quick_btn_frame, text="Last 7 Days", command=lambda: apply_quick_filter(168), 
+                 width=15, pady=5).pack(side=tk.LEFT, padx=5)
+        tk.Button(quick_btn_frame, text="Last 30 Days", command=lambda: apply_quick_filter(720), 
+                 width=15, pady=5).pack(side=tk.LEFT, padx=5)
+        
+        # Custom date range section
+        custom_frame = tk.LabelFrame(main_frame, text="Custom Date Range", padx=15, pady=15, bg="white")
+        custom_frame.pack(fill=tk.X)
+        
+        # From date/time
+        from_label = tk.Label(custom_frame, text="From:", font=("Arial", 10, "bold"), bg="white")
+        from_label.grid(row=0, column=0, sticky='w', pady=5)
+        
+        from_date_frame = tk.Frame(custom_frame, bg="white")
+        from_date_frame.grid(row=1, column=0, columnspan=4, sticky='w', pady=5)
+        
+        from_month = ttk.Combobox(from_date_frame, values=list(range(1, 13)), width=10, state='readonly')
+        from_month.current(self.last_from_month - 1)  # Index is 0-based
+        from_month.pack(side=tk.LEFT, padx=(0, 5))
+        tk.Label(from_date_frame, text="/", bg="white").pack(side=tk.LEFT)
+        
+        from_day = ttk.Combobox(from_date_frame, values=list(range(1, 32)), width=10, state='readonly')
+        from_day.current(self.last_from_day - 1)  # Index is 0-based
+        from_day.pack(side=tk.LEFT, padx=5)
+        tk.Label(from_date_frame, text="/", bg="white").pack(side=tk.LEFT)
+        
+        from_year = ttk.Combobox(from_date_frame, values=list(range(2020, 2031)), width=10, state='readonly')
+        from_year.current(self.last_from_year - 2020)  # Index based on range starting at 2020
+        from_year.pack(side=tk.LEFT, padx=5)
+        
+        from_time_frame = tk.Frame(custom_frame, bg="white")
+        from_time_frame.grid(row=2, column=0, columnspan=4, sticky='w', pady=5)
+        
+        from_hour = ttk.Combobox(from_time_frame, values=[f"{h:02d}" for h in range(24)], width=8, state='readonly')
+        from_hour.current(self.last_from_hour)
+        from_hour.pack(side=tk.LEFT, padx=(0, 5))
+        tk.Label(from_time_frame, text=":", bg="white").pack(side=tk.LEFT)
+        
+        from_minute = ttk.Combobox(from_time_frame, values=[f"{m:02d}" for m in range(60)], width=8, state='readonly')
+        from_minute.current(self.last_from_minute)
+        from_minute.pack(side=tk.LEFT, padx=5)
+        
+        # To date/time
+        to_label = tk.Label(custom_frame, text="To:", font=("Arial", 10, "bold"), bg="white")
+        to_label.grid(row=3, column=0, sticky='w', pady=(15, 5))
+        
+        to_date_frame = tk.Frame(custom_frame, bg="white")
+        to_date_frame.grid(row=4, column=0, columnspan=4, sticky='w', pady=5)
+        
+        to_month = ttk.Combobox(to_date_frame, values=list(range(1, 13)), width=10, state='readonly')
+        to_month.current(self.last_to_month - 1)  # Index is 0-based
+        to_month.pack(side=tk.LEFT, padx=(0, 5))
+        tk.Label(to_date_frame, text="/", bg="white").pack(side=tk.LEFT)
+        
+        to_day = ttk.Combobox(to_date_frame, values=list(range(1, 32)), width=10, state='readonly')
+        to_day.current(self.last_to_day - 1)  # Index is 0-based
+        to_day.pack(side=tk.LEFT, padx=5)
+        tk.Label(to_date_frame, text="/", bg="white").pack(side=tk.LEFT)
+        
+        to_year = ttk.Combobox(to_date_frame, values=list(range(2020, 2031)), width=10, state='readonly')
+        to_year.current(self.last_to_year - 2020)  # Index based on range starting at 2020
+        to_year.pack(side=tk.LEFT, padx=5)
+        
+        to_time_frame = tk.Frame(custom_frame, bg="white")
+        to_time_frame.grid(row=5, column=0, columnspan=4, sticky='w', pady=5)
+        
+        to_hour = ttk.Combobox(to_time_frame, values=[f"{h:02d}" for h in range(24)], width=8, state='readonly')
+        to_hour.current(self.last_to_hour)
+        to_hour.pack(side=tk.LEFT, padx=(0, 5))
+        tk.Label(to_time_frame, text=":", bg="white").pack(side=tk.LEFT)
+        
+        to_minute = ttk.Combobox(to_time_frame, values=[f"{m:02d}" for m in range(60)], width=8, state='readonly')
+        to_minute.current(self.last_to_minute)
+        to_minute.pack(side=tk.LEFT, padx=5)
+        
+        # Helper functions
+        def apply_quick_filter(hours):
+            """Apply quick time filter based on hours"""
+            from datetime import datetime, timedelta
+            end_time = datetime.now()
+            start_time = end_time - timedelta(hours=hours)
+            apply_time_filter(start_time.isoformat(), end_time.isoformat())
+            time_dialog.destroy()
+        
+        def apply_custom_range():
+            """Apply custom date range filter"""
+            try:
+                from datetime import datetime
+                start_str = f"{from_year.get()}-{int(from_month.get()):02d}-{int(from_day.get()):02d}T{from_hour.get()}:{from_minute.get()}:00"
+                end_str = f"{to_year.get()}-{int(to_month.get()):02d}-{int(to_day.get()):02d}T{to_hour.get()}:{to_minute.get()}:59"
+                
+                start_time = datetime.fromisoformat(start_str)
+                end_time = datetime.fromisoformat(end_str)
+                
+                if start_time >= end_time:
+                    messagebox.showerror("Invalid Range", "Start time must be before end time.")
+                    return
+                
+                # Save the values for next time
+                self.last_from_month = int(from_month.get())
+                self.last_from_day = int(from_day.get())
+                self.last_from_year = int(from_year.get())
+                self.last_from_hour = int(from_hour.get())
+                self.last_from_minute = int(from_minute.get())
+                self.last_to_month = int(to_month.get())
+                self.last_to_day = int(to_day.get())
+                self.last_to_year = int(to_year.get())
+                self.last_to_hour = int(to_hour.get())
+                self.last_to_minute = int(to_minute.get())
+                
+                apply_time_filter(start_time.isoformat(), end_time.isoformat())
+                time_dialog.destroy()
+            except ValueError as e:
+                messagebox.showerror("Invalid Date", f"Invalid date/time values:\n{e}")
+        
+        def apply_time_filter(start_iso, end_iso):
+            """Filter events by time range"""
+            if not self.original_results:
+                return
+            
+            from datetime import datetime
+            
+            try:
+                # Parse start and end times
+                start_dt = datetime.fromisoformat(start_iso.replace('Z', '+00:00'))
+                end_dt = datetime.fromisoformat(end_iso.replace('Z', '+00:00'))
+                
+                # Store filter state
+                self.time_filter_active = True
+                self.time_filter_start = start_iso
+                self.time_filter_end = end_iso
+                
+                # Filter each event list by time
+                filtered_results = {
+                    'file_path': self.original_results.get('file_path', ''),
+                    'file_size': self.original_results.get('file_size', 0),
+                    'file_type': self.original_results.get('file_type', 'Unknown'),
+                    'last_modified': self.original_results.get('last_modified', 'Unknown'),
+                    'total_lines': 0,
+                    'total_events': 0,
+                    'sysmon_events': [],
+                    'security_events': [],
+                    'system_events': [],
+                    'defender_events': [],
+                    'other_windows_events': [],
+                    'total_sysmon': 0,
+                    'total_security': 0,
+                    'total_system': 0,
+                    'total_defender': 0,
+                    'total_other_windows': 0,
+                    'counts': {},
+                    'os_version': self.original_results.get('os_version', 'Unknown'),
+                    'os_build': self.original_results.get('os_build', 'Unknown')
+                }
+                
+                # Filter Sysmon events
+                for event in self.original_results.get('sysmon_events', []):
+                    event_time_str = event['basic_info'].get('time_created', '')
+                    if event_time_str:
+                        try:
+                            event_dt = datetime.fromisoformat(event_time_str.replace('Z', '+00:00'))
+                            if start_dt <= event_dt <= end_dt:
+                                filtered_results['sysmon_events'].append(event)
+                        except:
+                            continue
+                
+                # Filter Security events
+                for event in self.original_results.get('security_events', []):
+                    event_time_str = event['basic_info'].get('time_created', '')
+                    if event_time_str:
+                        try:
+                            event_dt = datetime.fromisoformat(event_time_str.replace('Z', '+00:00'))
+                            if start_dt <= event_dt <= end_dt:
+                                filtered_results['security_events'].append(event)
+                        except:
+                            continue
+                
+                # Filter System events
+                for event in self.original_results.get('system_events', []):
+                    event_time_str = event['basic_info'].get('time_created', '')
+                    if event_time_str:
+                        try:
+                            event_dt = datetime.fromisoformat(event_time_str.replace('Z', '+00:00'))
+                            if start_dt <= event_dt <= end_dt:
+                                filtered_results['system_events'].append(event)
+                        except:
+                            continue
+                
+                # Filter Defender events
+                for event in self.original_results.get('defender_events', []):
+                    event_time_str = event['basic_info'].get('time_created', '')
+                    if event_time_str:
+                        try:
+                            event_dt = datetime.fromisoformat(event_time_str.replace('Z', '+00:00'))
+                            if start_dt <= event_dt <= end_dt:
+                                filtered_results['defender_events'].append(event)
+                        except:
+                            continue
+                
+                # Filter Other Windows events
+                for event in self.original_results.get('other_windows_events', []):
+                    event_time_str = event['basic_info'].get('time_created', '')
+                    if event_time_str:
+                        try:
+                            event_dt = datetime.fromisoformat(event_time_str.replace('Z', '+00:00'))
+                            if start_dt <= event_dt <= end_dt:
+                                filtered_results['other_windows_events'].append(event)
+                        except:
+                            continue
+                
+                # Update counts
+                filtered_results['total_sysmon'] = len(filtered_results['sysmon_events'])
+                filtered_results['total_security'] = len(filtered_results['security_events'])
+                filtered_results['total_system'] = len(filtered_results['system_events'])
+                filtered_results['total_defender'] = len(filtered_results['defender_events'])
+                filtered_results['total_other_windows'] = len(filtered_results['other_windows_events'])
+                filtered_results['total_events'] = (
+                    filtered_results['total_sysmon'] +
+                    filtered_results['total_security'] +
+                    filtered_results['total_system'] +
+                    filtered_results['total_defender']
+                )
+                filtered_results['total_lines'] = filtered_results['total_events']
+                
+                # Rebuild event ID counts
+                for event in (filtered_results['sysmon_events'] + 
+                             filtered_results['security_events'] + 
+                             filtered_results['system_events'] +
+                             filtered_results['defender_events']):
+                    # Event ID is at top level of event dictionary
+                    event_id = event.get('event_id', 'Unknown')
+                    filtered_results['counts'][event_id] = filtered_results['counts'].get(event_id, 0) + 1
+                
+                # Check if any events remain
+                if filtered_results['total_events'] == 0:
+                    # Format timestamps for better readability
+                    from datetime import datetime
+                    try:
+                        start_formatted = datetime.fromisoformat(start_iso.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
+                        end_formatted = datetime.fromisoformat(end_iso.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
+                    except:
+                        start_formatted = start_iso
+                        end_formatted = end_iso
+                    
+                    messagebox.showwarning(
+                        "No Events Found",
+                        f"No events found in the specified time range:\n\n"
+                        f"From: {start_formatted}\n"
+                        f"To: {end_formatted}\n\n"
+                        f"Try expanding your time window."
+                    )
+                    return
+                
+                # Re-run analysis on filtered events
+                from analysis import analyze_malware, extract_timeline
+                import xml.etree.ElementTree as ET
+                
+                # Rebuild timeline from filtered events
+                raw_events = []
+                all_events = (filtered_results['sysmon_events'] + 
+                             filtered_results['security_events'] + 
+                             filtered_results['system_events'] +
+                             filtered_results['defender_events'])
+                
+                for event in all_events:
+                    try:
+                        # Get the XML element from the event (stored in 'root' field)
+                        if 'root' in event and hasattr(event['root'], 'tag'):
+                            raw_events.append(ET.tostring(event['root'], encoding='unicode'))
+                    except:
+                        continue
+                
+                filtered_timeline = extract_timeline(raw_events) if raw_events else None
+                filtered_malware = analyze_malware(filtered_results, filtered_timeline)
+                
+                # Update displayed results
+                self.all_results = filtered_results
+                self.malware_analysis = filtered_malware
+                self.timeline_data = filtered_timeline
+                
+                # Update available event IDs
+                self.available_event_ids = self.safe_sort_event_ids(filtered_results['counts'].keys())
+                
+                # Re-display results — respect any active event ID filter
+                display_path = self.selected_file if isinstance(self.selected_file, str) else f"{len(self.selected_file)} files from directory"
+                
+                from datetime import datetime
+                try:
+                    start_formatted = datetime.fromisoformat(start_iso.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
+                    end_formatted = datetime.fromisoformat(end_iso.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
+                except:
+                    start_formatted = start_iso
+                    end_formatted = end_iso
+
+                header = f"\n{'=' * 60}\n"
+                header += f"TIME FILTERED RESULTS\n"
+                header += f"{'=' * 60}\n"
+                header += f"Time Range: {start_formatted} to {end_formatted}\n"
+                header += f"Filtered Events: {filtered_results['total_events']} of {self.original_results['total_events']} original events\n"
+                header += f"{'=' * 60}\n\n"
+
+                if self.selected_event_ids:
+                    body = self.generate_filtered_results(display_path, filtered_results, self.selected_event_ids)
+                else:
+                    body = self.generate_results(display_path, filtered_results)
+                    body += self.generate_timeline_summary(filtered_timeline)
+                    body += self.generate_malware_summary(filtered_malware)
+
+                output = header + body
+                
+                self.results_text.config(state=tk.NORMAL)
+                self.results_text.delete(1.0, tk.END)
+                self.results_text.insert(tk.END, output)
+                self.results_text.config(state=tk.DISABLED)
+                
+                # Update time filter button to show it's active
+                self.time_filter_btn.config(text="📅 Time Filtering (Active)")
+                self.update_clear_filters_button()
+                
+                messagebox.showinfo(
+                    "Time Filter Applied",
+                    f"Showing {filtered_results['total_events']} events from the time range:\n\n"
+                    f"From: {start_formatted}\n"
+                    f"To: {end_formatted}\n\n"
+                    f"Click 'Clear Filters' to restore all events."
+                )
+                
+            except Exception as e:
+                messagebox.showerror("Filter Error", f"Error applying time filter:\n{str(e)}")
+        
+        # Button frame
+        button_frame = tk.Frame(main_frame, bg="white")
+        button_frame.pack(fill=tk.X, pady=(20, 0))
+        
+        # Clear Time Filter button (left side)
+        tk.Button(button_frame, text="Clear Time Filter", command=lambda: [self.clear_time_filter(), time_dialog.destroy()],
+                 bg="white", fg="#374151", padx=20, pady=8, relief=tk.SOLID, borderwidth=1
+                 ).pack(side=tk.LEFT)
+        
+        # Exit button (right side)
+        tk.Button(button_frame, text="Exit", command=time_dialog.destroy,
+                 bg="white", fg="#374151", padx=20, pady=8, relief=tk.SOLID, borderwidth=1
+                 ).pack(side=tk.RIGHT)
+        
+        # Apply Custom Range button (right side, before Exit)
+        tk.Button(button_frame, text="Apply Custom Range", command=apply_custom_range,
+                 bg="#2563eb", fg="white", padx=20, pady=8, relief=tk.FLAT
+                 ).pack(side=tk.RIGHT, padx=(0, 10))
     
     def collect_incident_context(self):
         """Collect incident context information via dialog"""
@@ -1034,7 +1793,16 @@ Event ID Breakdown:
             command=context_dialog.destroy
         )
         close_btn.pack(side=tk.RIGHT)
-        
+
+        # Character limit notice
+        tk.Label(
+            main_frame,
+            text="Each field has a 500 character limit in the report.",
+            font=("Arial", 9),
+            bg="white",
+            fg="#6b7280"
+        ).pack(anchor='w', pady=(0, 15))
+
         # Field 1: Reported by / How it was reported
         tk.Label(
             main_frame,
@@ -1217,7 +1985,7 @@ Event ID Breakdown:
         all_events.extend(self.all_results.get('sysmon_events', []))
         all_events.extend(self.all_results.get('security_events', []))
         all_events.extend(self.all_results.get('system_events', []))
-        all_events.extend(self.all_results.get('application_events', []))
+        all_events.extend(self.all_results.get('defender_events', []))
         all_events.extend(self.all_results.get('windows_events', []))
         
         # Well-known built-in/system accounts to exclude from user lists
