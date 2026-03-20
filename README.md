@@ -380,13 +380,13 @@ Our creation:
 
 **Solution**:
 - Close the tool, right-click the executable, and select "Run as administrator"
-- Alternatively, export the logs from Event Viewer (right-click a log → "Save All Events As..." → save as .evtx) and load the exported files using Browse File instead
+- Alternatively, export the logs from Event Viewer (right-click a log → "Save All Events As..." → save as .evtx) and load the exported file(s) using Browse File/Directory instead
 
 ### Tool is slow or freezing
 
 **Problem**: Large log files (100MB+) can take a while to process.
 
-**Solution**: This is normal for logs with hundreds of events. Give it a minute or two. If loading a full directory, processing time scales with the number and size of files selected. Use the Default Windows Logs button or Browse Directory to limit the load to the four supported log types when scanning a system folder.
+**Solution**: This is normal for logs with hundreds of events. Give it a minute or two. If loading a full directory, processing time scales with the number and size of files selected. Use the Default Windows Logs button or Browse Directory to limit the load to the four supported log types when scanning a system folder. It takes around 7 minutes to scan around 80,000 logs
 
 ### "Generate Report" button is grayed out
 
