@@ -1,6 +1,6 @@
 # DuCharme Triage Assistant
 
-**Version 7.0** | Trine University Senior Capstone Project
+**Version 0.7** | Trine University Senior Capstone Project
 
 A Windows event log analyzer that helps incident responders quickly identify malware and security breaches through a triage workflow. Built for DuCharme, McMillen & Associates, Inc.
 
@@ -502,4 +502,4 @@ DuCharme-Triage-Workflow-Project/
 
 ---
 
-Version 7.0 | Last updated: Apr. 2026
+Version 0.7 | Last updated: Apr. 2026
