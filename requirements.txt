@@ -1,10 +1,30 @@
-# DuCharme Triage Assistant Tool - Requirements
-# Sprint 3 Demo Dependencies
-# Core log parsing library
-python-evtx==0.7.4
-# For creating executable
-pyinstaller==6.2.0
-# Report generation - PDF
-# reportlab==4.0.7
-# Report generation - Text templates
-jinja2==3.1.2
+# DuCharme Triage Assistant - Requirements
+# Python 3.11 required (evtx is incompatible with Python 3.12+)
+# Install Python 3.11: winget install Python.Python.3.11
+# Create venv with: py -3.11 -m venv venv
+
+# Log parsing (Rust-based, must be built from source)
+# Requires Rust/Cargo on PATH before installing:
+#   winget install Rustlang.Rustup 
+#   set PATH=C:\Users\<you>\.cargo\bin;%PATH%
+# Then install with:
+#   pip install evtx --no-binary evtx
+evtx==0.8.0
+
+# Report generation (PDF)
+reportlab==4.2.5
+
+# GUI (included with Python standard library - no install needed)
+# tkinter
+
+# Executable packaging
+pyinstaller==6.19.0
+# Build command:
+#   pyinstaller --onefile --windowed --add-data "malware_indicators.csv;." --add-data "defender_indicators.csv;." --add-data "breach_indicators.csv;." main.py
+# Output: dist\main.exe
+#
+# Deployment notes:
+#   - No Python required on target machine
+#   - Target must be 64-bit Windows 10/11
+#   - If exe crashes on target, install VC++ Redist: https://aka.ms/vs/17/release/vc_redist.x64.exe
+#   - Antivirus may flag the exe as suspicious. Whitelist if needed
