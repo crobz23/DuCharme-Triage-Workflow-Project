@@ -1,11 +1,114 @@
 # gui.py
+import os
+import re
+from collections import Counter
+from datetime import datetime, timedelta
 import tkinter as tk
 from tkinter import filedialog, scrolledtext, messagebox
 from tkinter import ttk
-import os
+
+from parser import _CREDENTIAL_EIDS
 
 # Log files supported by the parser. When scanning a directory only these
 # files will be loaded — everything else is ignored.
+WINDOWS_EVENT_DESCRIPTIONS = {
+    # System.evtx
+    '1': 'A system error occurred', '6': 'A driver was loaded',
+    '7': 'A service was started or stopped', '10': 'A COM+ catalog error occurred',
+    '11': 'A disk controller error was detected', '12': 'The Service Control Manager started',
+    '13': 'The Service Control Manager stopped', '15': 'A disk device error occurred',
+    '41': 'The computer restarted unexpectedly', '42': 'The computer is entering sleep mode',
+    '51': 'A disk paging error occurred', '55': 'A file system corruption was detected',
+    '104': 'The System log was cleared', '107': 'The computer woke up from sleep',
+    '109': 'A kernel power transition occurred', '1001': 'A Windows Error Reporting crash occurred',
+    '1014': 'A DNS client resolution timeout occurred', '1100': 'Event logging was shut down',
+    '1101': 'Audit events were dropped', '1102': 'The Security audit log was cleared',
+    '1530': 'A user profile could not be loaded', '6005': 'The Event Log service started',
+    '6006': 'The Event Log service stopped', '6008': 'An unexpected system shutdown occurred',
+    '6009': 'System boot information was logged', '6013': 'System uptime was recorded',
+    '7000': 'A service failed to start', '7001': 'A service depends on another service that failed',
+    '7009': 'A service timeout occurred during startup', '7011': 'A service timeout occurred during operation',
+    '7022': 'A service hung on starting', '7023': 'A service terminated with an error',
+    '7024': 'A service terminated with a service-specific error',
+    '7026': 'A boot-start or system-start driver failed to load',
+    '7030': 'A service was configured incorrectly', '7031': 'A service terminated unexpectedly',
+    '7032': 'The Service Control Manager attempted corrective action',
+    '7034': 'A service crashed unexpectedly', '7035': 'A service control was sent',
+    '7036': 'A service entered running or stopped state', '7040': 'A service startup type was changed',
+    '7045': 'A new service was installed',
+    # Security
+    '4103': 'A PowerShell script was executed', '4104': 'A PowerShell command was executed',
+    '4105': 'A PowerShell script started', '4106': 'A PowerShell script stopped',
+    '4616': 'The system time was changed', '4624': 'A user successfully logged in',
+    '4625': 'A user failed to log in', '4634': 'A user session ended',
+    '4647': 'A user logged out', '4648': 'A user logged in with different credentials',
+    '4656': 'A file or folder was accessed', '4657': 'A system setting was changed',
+    '4663': 'A file or folder was accessed', '4670': 'File or folder permissions were changed',
+    '4672': 'A user was given special access rights', '4673': 'A privileged operation was attempted',
+    '4688': 'A program was started', '4689': 'A program was closed',
+    '4698': 'A scheduled task was created', '4699': 'A scheduled task was deleted',
+    '4700': 'A scheduled task was enabled', '4701': 'A scheduled task was disabled',
+    '4702': 'A scheduled task was updated', '4719': 'An audit policy was changed',
+    '4720': 'A user account was created', '4722': 'A user account was enabled',
+    '4723': 'A password change was attempted', '4724': 'A password reset was attempted',
+    '4725': 'A user account was disabled', '4726': 'A user account was deleted',
+    '4728': 'A user was added to a global security group',
+    '4732': 'A user was added to a local security group',
+    '4733': 'A user was removed from a group', '4735': 'A security group was changed',
+    '4737': 'A global security group was changed', '4738': 'A user account was modified',
+    '4740': 'A user account was locked', '4755': 'A universal security group was changed',
+    '4756': 'A user was added to a universal group', '4757': 'A user was removed from a universal group',
+    '4765': 'A security identifier history was added', '4767': 'A user account was unlocked',
+    '4768': 'A Kerberos login ticket was requested', '4769': 'A Kerberos service ticket was requested',
+    '4771': 'A Kerberos pre-authentication failed', '4776': 'A login attempt was validated',
+    '4778': 'A remote session was reconnected', '4779': 'A remote session was disconnected',
+    '4794': 'A password recovery mode was attempted', '5136': 'A directory object was modified',
+    '5137': 'A directory object was created', '5140': 'A network folder was accessed',
+    '5141': 'A directory object was deleted', '5142': 'A network folder was shared',
+    '5145': 'A network folder access was checked',
+    '5379': 'Credential Manager credentials were read',
+    # Windows Defender
+    '1005': 'Windows Defender detected a script-based threat',
+    '1006': 'Windows Defender detected a network-based threat',
+    '1008': 'Windows Defender blocked a network connection',
+    '1013': 'Windows Defender detection history was cleared',
+    '1116': 'Windows Defender detected malware or potentially unwanted software',
+    '1117': 'Windows Defender took action to protect against malware',
+    '1118': 'Windows Defender failed to remediate a threat',
+    '1119': 'Windows Defender encountered a critical error trying to take action on malware',
+    '1120': 'Windows Defender failed to remove malware from quarantine',
+    '1121': 'Windows Defender blocked a potentially malicious behavior',
+    '1122': 'Windows Defender logged a potentially malicious behavior',
+    '1123': 'Windows Defender blocked unauthorized changes to protected folders',
+    '1124': 'Windows Defender blocked an exploit attempt',
+    '1150': 'Windows Defender could not clean or quarantine a detected threat',
+    '2050': 'Windows Defender real-time protection was disabled',
+    '3007': 'Windows Defender detected an advanced persistent threat (APT)',
+    '3020': 'Windows Defender blocked a PowerShell or script-based attack',
+    '5001': 'Windows Defender Tamper Protection was successfully disabled',
+    '5004': 'Windows Defender Tamper Protection disable attempt was detected',
+    '5007': 'Windows Defender configuration was changed',
+    '5010': 'Windows Defender scanning was disabled',
+}
+
+SYSMON_EVENT_DESCRIPTIONS = {
+    '1': 'A program was started', '2': 'A file timestamp was changed',
+    '3': 'A network connection was made', '4': 'A Sysmon service state changed',
+    '5': 'A program was closed', '6': 'A driver was loaded',
+    '7': 'A library file was loaded', '8': 'A program injected code into another program',
+    '9': 'A disk was accessed directly', '10': 'A program accessed another program',
+    '11': 'A file was created', '12': 'A registry entry was created or deleted',
+    '13': 'A registry value was set', '14': 'A registry entry was renamed',
+    '15': 'A file stream was created', '16': 'A Sysmon configuration was changed',
+    '17': 'A communication pipe was created', '18': 'A communication pipe was connected',
+    '19': 'A WMI event filter was detected', '20': 'A WMI event consumer was detected',
+    '21': 'A WMI event binding was detected', '22': 'A DNS query was made',
+    '23': 'A file was deleted', '24': 'A clipboard change was detected',
+    '25': 'A program was tampered with', '26': 'A file deletion was logged',
+    '27': 'An executable file was blocked', '28': 'A file shredding was blocked',
+    '29': 'An executable file was detected',
+}
+
 SUPPORTED_LOG_NAMES = {
     'security.evtx',
     'system.evtx',
@@ -13,9 +116,100 @@ SUPPORTED_LOG_NAMES = {
     'microsoft-windows-windows defender%4operational.evtx',
 }
 
+FIELD_LABELS = {
+    "user":             "User",
+    "added_user":       "Added User",
+    "added_by":         "Added By",
+    "process":          "Process",
+    "source_image":     "Source",
+    "target_image":     "Target",
+    "command_line":     "Command",
+    "src_ip":           "Source IP",
+    "dest_ip":          "Dest IP",
+    "dest_port":        "Port",
+    "dns_query":        "DNS Query",
+    "file_path":        "File",
+    "image_loaded":     "DLL Loaded",
+    "registry_key":     "Registry Key",
+    "service_name":     "Service",
+    "service_path":     "Service Path",
+    "service_account":  "Service Account",
+    "task_name":        "Task Name",
+    "logon_type":       "Logon Type",
+    "removed_user":     "Removed User",
+    "removed_by":       "Removed By",
+    "deleted_user":     "Deleted User",
+    "deleted_by":       "Deleted By",
+    "threat_name":      "Threat",
+    "threat_severity":  "Severity",
+    "action_taken":     "Action",
+    "threat_file_path": "Threat File",
+    "config_old_value": "Config Before",
+    "config_new_value": "Config After",
+    "feature_change":   "Protection Change",
+    "share_name":       "Share",
+    "relative_target":  "Pipe / Path",
+}
+
+# Event IDs where the process field is noise (logon/auth events)
+# Imported from parser to avoid duplication — see parser._CREDENTIAL_EIDS
+
+# EID 1 parent-chain heuristic sets — defined once here, used in both
+# extract_deep_dive_data (deep-dive filter) and the matching comment below.
+# Must stay in sync with the equivalent sets in analysis.py.
+_EID1_SUSPICIOUS_SPAWNERS = {
+    'jjs.exe', 'wmic.exe', 'mshta.exe', 'cscript.exe', 'wscript.exe',
+    'regsvr32.exe', 'rundll32.exe', 'msiexec.exe', 'installutil.exe',
+    'schtasks.exe', 'at.exe', 'odbcconf.exe', 'pcalua.exe', 'forfiles.exe',
+}
+_EID1_RECON_SHELLS = {
+    'cmd.exe', 'powershell.exe', 'whoami.exe', 'net.exe',
+    'ipconfig.exe', 'systeminfo.exe', 'tasklist.exe',
+    'nltest.exe', 'arp.exe', 'route.exe', 'netstat.exe',
+}
+_EID1_INSTALLER_ROOTS = (
+    'c:\\program files\\', 'c:\\program files (x86)\\',
+    'c:\\windows\\system32\\', 'c:\\windows\\syswow64\\',
+)
+_EID1_DISCOVERY_CMDS = (
+    'whoami', 'systeminfo', 'ipconfig', 'net user', 'net group',
+    'nltest', 'arp ', 'route print', 'tasklist', 'netstat', '/c ', '/k ',
+)
+
+
 def _is_supported_log(filename):
     """Return True if the filename matches a supported log."""
     return filename.lower() in SUPPORTED_LOG_NAMES
+
+
+def _format_network_ips(ips, malware_analysis, total_observed=0):
+    """Build the human-readable network connections string for the scope section.
+
+    Only IPs drawn from Sysmon EID 3 events that the malware engine actually
+    flagged are included — so this field shows confirmed suspicious outbound
+    connections rather than all external traffic.
+
+    Up to 10 flagged IPs shown; count note appended when there are more.
+    total_observed is the count of all unique external IPs seen in EID 3 events
+    (flagged or not), shown for analyst context.
+    Returns a plain 'none detected' string when no flagged IPs exist.
+    """
+    if not ips:
+        if total_observed:
+            return (f'No suspicious external network connections detected'
+                    f'  ({total_observed} total unique external IP(s) observed)')
+        return 'No suspicious external network connections detected'
+
+    sorted_ips = sorted(ips)
+    shown = sorted_ips[:10]
+    result = ', '.join(shown)
+    if len(sorted_ips) > 10:
+        result += f' ... and {len(sorted_ips) - 10} more'
+    result += f'  ({len(sorted_ips)} suspicious IP(s) flagged by threat engine'
+    if total_observed > len(sorted_ips):
+        result += f'; {total_observed} total unique external IP(s) observed'
+    result += ')'
+    return result
 
 
 class TriageToolGUI:
@@ -30,11 +224,11 @@ class TriageToolGUI:
         self.selected_file = None
         self.all_results = None
         self.malware_analysis = None  # Store malware analysis results
+        self.assessment_data = None   # Store CSV-driven assessment from generate_assessment()
         self.timeline_data = None  # Store timeline data
+        self.deep_dive_data = None  # Store evidence for deep dives section
         self.available_event_ids = []
         self.selected_event_ids = []
-        self.filter_search_var = tk.StringVar()
-        
         # Time filter variables
         self.time_filter_active = False
         self.time_filter_start = None
@@ -56,6 +250,7 @@ class TriageToolGUI:
         self.original_results = None
         self.original_malware_analysis = None
         self.original_timeline_data = None
+        self.original_deep_dive_data = None
         
         # Create GUI elements
         self.create_widgets()
@@ -381,15 +576,13 @@ class TriageToolGUI:
                 except Exception as e:
                     failed_files.append((filepath, str(e)))
 
-            events = all_events
-            
             # Show parsing summary if there were failures
             if failed_files:
                 self.results_text.insert(tk.END, f"\nParsing Summary:\n")
                 self.results_text.insert(tk.END, f"  Successfully parsed: {successful_files} file(s)\n")
                 self.results_text.insert(tk.END, f"  Failed to parse: {len(failed_files)} file(s)\n\n")
             
-            if not events:
+            if not all_events:
                 if failed_files:
                     self.results_text.insert(tk.END, f"\nPermission Denied - Administrator Required\n")
                     self.results_text.insert(tk.END, f"=" * 60 + "\n\n")
@@ -420,33 +613,29 @@ class TriageToolGUI:
                 return
             
             # Continue with analysis if we have events
-            self.results_text.insert(tk.END, f"\nProceeding with {len(events)} events from {successful_files} file(s)...\n")
+            self.results_text.insert(tk.END, f"\nProceeding with {len(all_events)} events from {successful_files} file(s)...\n")
             self.results_text.update()
             
             # Analyze events
-            self.all_results = analyze_events(events)
+            self.all_results = analyze_events(all_events)
             
-            # Extract timeline from raw XML events (needed for confidence boosting)
-            # Need to get raw XML strings from events
-            from analysis import analyze_malware, extract_timeline
-            import xml.etree.ElementTree as ET
-            
-            raw_events = []
-            for event in events:
-                try:
-                    raw_events.append(ET.tostring(event, encoding='unicode'))
-                except:
-                    continue
-            
-            self.timeline_data = extract_timeline(raw_events)
+            # Extract timeline from parsed event dicts
+            from analysis import analyze_malware, extract_timeline, generate_assessment
+
+            self.timeline_data = extract_timeline(all_events)
             
             # Run malware analysis with timeline data for confidence boosting
             self.malware_analysis = analyze_malware(self.all_results, self.timeline_data)
-            
+            self.assessment_data = generate_assessment(self.malware_analysis)
+
+            # Extract deep dive evidence from parsed events
+            self.deep_dive_data = self.extract_deep_dive_data(self.all_results)
+
             # Store original unfiltered results for time filtering
             self.original_results = self.all_results
             self.original_malware_analysis = self.malware_analysis
             self.original_timeline_data = self.timeline_data
+            self.original_deep_dive_data = self.deep_dive_data
             
             # Extract available Event IDs and enable filter and report button
             self.available_event_ids = self.safe_sort_event_ids(self.all_results['counts'].keys())
@@ -474,152 +663,12 @@ class TriageToolGUI:
     
     def get_event_description(self, event_id, prefer_sysmon=False):
         """Get description for a given Event ID"""
-        # Windows Security Event IDs
-        windows_events = {
-        # System.evtx Events (user-friendly for non-IT people)
-        '1': 'A system error occurred',
-        '6': 'A driver was loaded',
-        '7': 'A service was started or stopped',
-        '10': 'A COM+ catalog error occurred',
-        '11': 'A disk controller error was detected',
-        '12': 'The Service Control Manager started',
-        '13': 'The Service Control Manager stopped',
-        '15': 'A disk device error occurred',
-        '41': 'The computer restarted unexpectedly',
-        '42': 'The computer is entering sleep mode',
-        '51': 'A disk paging error occurred',
-        '55': 'A file system corruption was detected',
-        '104': 'The System log was cleared',
-        '107': 'The computer woke up from sleep',
-        '109': 'A kernel power transition occurred',
-        '1001': 'A Windows Error Reporting crash occurred',
-        '1014': 'A DNS client resolution timeout occurred',
-        '1100': 'Event logging was shut down',
-        '1101': 'Audit events were dropped',
-        '1102': 'The Security audit log was cleared',
-        '1530': 'A user profile could not be loaded',
-        '6005': 'The Event Log service started',
-        '6006': 'The Event Log service stopped',
-        '6008': 'An unexpected system shutdown occurred',
-        '6009': 'System boot information was logged',
-        '6013': 'System uptime was recorded',
-        '7000': 'A service failed to start',
-        '7001': 'A service depends on another service that failed',
-        '7009': 'A service timeout occurred during startup',
-        '7011': 'A service timeout occurred during operation',
-        '7022': 'A service hung on starting',
-        '7023': 'A service terminated with an error',
-        '7024': 'A service terminated with a service-specific error',
-        '7026': 'A boot-start or system-start driver failed to load',
-        '7030': 'A service was configured incorrectly',
-        '7031': 'A service terminated unexpectedly',
-        '7032': 'The Service Control Manager attempted corrective action',
-        '7034': 'A service crashed unexpectedly',
-        '7035': 'A service control was sent',
-        '7036': 'A service entered running or stopped state',
-        '7040': 'A service startup type was changed',
-        '7045': 'A new service was installed',
-        # Security Event IDs (technical format)
-        '4103': 'A PowerShell script was executed',
-        '4104': 'A PowerShell command was executed',
-        '4105': 'A PowerShell script started',
-        '4106': 'A PowerShell script stopped',
-        '4616': 'The system time was changed',
-        '4624': 'A user successfully logged in',
-        '4625': 'A user failed to log in',
-        '4634': 'A user session ended',
-        '4647': 'A user logged out',
-        '4648': 'A user logged in with different credentials',
-        '4656': 'A file or folder was accessed',
-        '4657': 'A system setting was changed',
-        '4663': 'A file or folder was accessed',
-        '4670': 'File or folder permissions were changed',
-        '4672': 'A user was given special access rights',
-        '4673': 'A privileged operation was attempted',
-        '4688': 'A program was started',
-        '4689': 'A program was closed',
-        '4698': 'A scheduled task was created',
-        '4699': 'A scheduled task was deleted',
-        '4700': 'A scheduled task was enabled',
-        '4701': 'A scheduled task was disabled',
-        '4702': 'A scheduled task was updated',
-        '4719': 'An audit policy was changed',
-        '4720': 'A user account was created',
-        '4722': 'A user account was enabled',
-        '4723': 'A password change was attempted',
-        '4724': 'A password reset was attempted',
-        '4725': 'A user account was disabled',
-        '4726': 'A user account was deleted',
-        '4728': 'A user was added to a global security group',
-        '4732': 'A user was added to a local security group',
-        '4733': 'A user was removed from a group',
-        '4735': 'A security group was changed',
-        '4737': 'A global security group was changed',
-        '4738': 'A user account was modified',
-        '4740': 'A user account was locked',
-        '4755': 'A universal security group was changed',
-        '4756': 'A user was added to a universal group',
-        '4757': 'A user was removed from a universal group',
-        '4765': 'A security identifier history was added',
-        '4767': 'A user account was unlocked',
-        '4768': 'A Kerberos login ticket was requested',
-        '4769': 'A Kerberos service ticket was requested',
-        '4771': 'A Kerberos pre-authentication failed',
-        '4776': 'A login attempt was validated',
-        '4778': 'A remote session was reconnected',
-        '4779': 'A remote session was disconnected',
-        '4794': 'A password recovery mode was attempted',
-        '5136': 'A directory object was modified',
-        '5137': 'A directory object was created',
-        '5140': 'A network folder was accessed',
-        '5141': 'A directory object was deleted',
-        '5142': 'A network folder was shared',
-        '5145': 'A network folder access was checked',
-        }
-        
-        # Sysmon Event IDs
-        sysmon_events = {
-            '1': 'A program was started',
-            '2': 'A file timestamp was changed',
-            '3': 'A network connection was made',
-            '4': 'A Sysmon service state changed',
-            '5': 'A program was closed',
-            '6': 'A driver was loaded',
-            '7': 'A library file was loaded',
-            '8': 'A program injected code into another program',
-            '9': 'A disk was accessed directly',
-            '10': 'A program accessed another program',
-            '11': 'A file was created',
-            '12': 'A registry entry was created or deleted',
-            '13': 'A registry value was set',
-            '14': 'A registry entry was renamed',
-            '15': 'A file stream was created',
-            '16': 'A Sysmon configuration was changed',
-            '17': 'A communication pipe was created',
-            '18': 'A communication pipe was connected',
-            '19': 'A WMI event filter was detected',
-            '20': 'A WMI event consumer was detected',
-            '21': 'A WMI event binding was detected',
-            '22': 'A DNS query was made',
-            '23': 'A file was deleted',
-            '24': 'A clipboard change was detected',
-            '25': 'A program was tampered with',
-            '26': 'A file deletion was logged',
-            '27': 'An executable file was blocked',
-            '28': 'A file shredding was blocked',
-            '29': 'An executable file was detected',
-        }
-        
-        # Check both dictionaries, preferring Sysmon if the event came from that channel
-        if prefer_sysmon:
-            if event_id in sysmon_events:
-                return sysmon_events[event_id]
-            elif event_id in windows_events:
-                return windows_events[event_id]
-        else:
-            if event_id in windows_events:
-                return windows_events[event_id]
-            # Do NOT fall back to Sysmon descriptions for Windows channel events
+        primary, fallback = (SYSMON_EVENT_DESCRIPTIONS, WINDOWS_EVENT_DESCRIPTIONS) if prefer_sysmon else (WINDOWS_EVENT_DESCRIPTIONS, None)
+        desc = primary.get(event_id)
+        if desc:
+            return desc
+        if fallback:
+            return fallback.get(event_id, "An event was recorded")
         return "An event was recorded"
     
     def open_filter_dialog(self):
@@ -763,23 +812,14 @@ class TriageToolGUI:
         # Create checkboxes for each Event ID
         checkboxes = {}
 
-        sysmon_counts = {}
-        for event in (self.all_results.get('sysmon_events', []) if self.all_results else []):
-            eid = event.get('event_id', '')
-            sysmon_counts[eid] = sysmon_counts.get(eid, 0) + 1
+        sysmon_eids = self._sysmon_eids(self.all_results) if self.all_results else set()
 
         for event_id in self.available_event_ids:
             var = tk.BooleanVar(value=(event_id in self.selected_event_ids))
             check_vars[event_id] = var
 
-            # Get description for this event, using Sysmon descriptions where appropriate
-            description = self.get_event_description(event_id, prefer_sysmon=(event_id in sysmon_counts))
-
-            # Annotate only if this ID actually came from the Sysmon channel
-            if event_id in sysmon_counts:
-                label_text = f"Event ID {event_id} (Sysmon)"
-            else:
-                label_text = f"Event ID {event_id}"
+            description = self.get_event_description(event_id, prefer_sysmon=(event_id in sysmon_eids))
+            label_text = self._eid_label(event_id, sysmon_eids)
 
             # Create a frame for each checkbox + description
             cb_frame = tk.Frame(scrollable_frame, bg="white")
@@ -822,8 +862,7 @@ class TriageToolGUI:
                     search_term = ""
                 
                 for event_id, cb_frame in checkboxes.items():
-                    # Get description using correct channel
-                    description = self.get_event_description(event_id, prefer_sysmon=(event_id in sysmon_counts))
+                    description = self.get_event_description(event_id, prefer_sysmon=(event_id in sysmon_eids))
                     
                     # Search in both event ID and description
                     if (search_term.lower() in event_id.lower() or 
@@ -929,7 +968,6 @@ class TriageToolGUI:
 
         # Prepend time filter header if time filter is also active
         if self.time_filter_active:
-            from datetime import datetime
             try:
                 start_formatted = datetime.fromisoformat(self.time_filter_start.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
                 end_formatted = datetime.fromisoformat(self.time_filter_end.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
@@ -952,26 +990,21 @@ class TriageToolGUI:
         self.update_clear_filters_button()
 
 
-    def clear_filter(self):
-        """Clear Event ID filter"""
-        self.selected_event_ids = []
-        self.update_filter_badge()
-        self.apply_event_filter()
-    
+    def _restore_original_results(self):
+        """Restore all_results and related state to the unfiltered originals."""
+        self.all_results = self.original_results
+        self.malware_analysis = self.original_malware_analysis
+        self.timeline_data = self.original_timeline_data
+        self.deep_dive_data = self.original_deep_dive_data
+        self.available_event_ids = self.safe_sort_event_ids(self.original_results['counts'].keys())
+
     def clear_time_filter(self):
         """Clear time filter and restore original results"""
         if not self.time_filter_active:
             return
         
         # Restore original results
-        self.all_results = self.original_results
-        self.malware_analysis = self.original_malware_analysis
-        self.timeline_data = self.original_timeline_data
-        
-        # Update available event IDs
-        self.available_event_ids = self.safe_sort_event_ids(self.original_results['counts'].keys())
-        
-        # Clear time filter state
+        self._restore_original_results()
         self.time_filter_active = False
         self.time_filter_start = None
         self.time_filter_end = None
@@ -1006,10 +1039,7 @@ class TriageToolGUI:
             self.time_filter_btn.config(text="📅 Time Filtering")
             
             # Restore original results
-            self.all_results = self.original_results
-            self.malware_analysis = self.original_malware_analysis
-            self.timeline_data = self.original_timeline_data
-            self.available_event_ids = self.safe_sort_event_ids(self.original_results['counts'].keys())
+            self._restore_original_results()
         
         # Clear Event ID filter
         self.selected_event_ids = []
@@ -1031,10 +1061,8 @@ class TriageToolGUI:
     
     def update_clear_filters_button(self):
         """Enable/disable Clear Filters button based on whether any filters are active"""
-        if self.time_filter_active or self.selected_event_ids:
-            self.clear_filters_btn.config(state=tk.NORMAL)
-        else:
-            self.clear_filters_btn.config(state=tk.DISABLED)
+        state = tk.NORMAL if (self.time_filter_active or self.selected_event_ids) else tk.DISABLED
+        self.clear_filters_btn.config(state=state)
     
     def update_filter_badge(self):
         """Update filter badge display"""
@@ -1046,12 +1074,19 @@ class TriageToolGUI:
             self.filter_badge.pack_forget()
             self.filter_btn.config(text="🔍 Filter by Event ID")
     
+    @staticmethod
+    def _sysmon_eids(results):
+        """Return the set of event IDs that came from the Sysmon channel."""
+        return {e.get('event_id', '') for e in results.get('sysmon_events', [])}
+
+    @staticmethod
+    def _eid_label(eid, sysmon_eids):
+        """Return 'Event ID N (Sysmon)' or 'Event ID N' depending on channel."""
+        suffix = " (Sysmon)" if eid in sysmon_eids else ""
+        return f"Event ID {eid}{suffix}"
+
     def generate_filtered_results(self, file_path, results, selected_ids):
         """Generate filtered results showing only selected Event IDs"""
-        from collections import Counter
-        import os
-        from datetime import datetime
-        
         # Handle both single file and directory/multiple files
         if isinstance(file_path, list):
             file_size = sum(os.path.getsize(f) / 1024 for f in file_path if os.path.isfile(f))
@@ -1089,18 +1124,11 @@ Filtered Event ID Breakdown:
 {"=" * 60}
 """
         
-        sysmon_counts = {}
-        for event in results.get('sysmon_events', []):
-            eid = event.get('event_id', '')
-            sysmon_counts[eid] = sysmon_counts.get(eid, 0) + 1
+        sysmon_eids = self._sysmon_eids(results)
 
         for eid in self.safe_sort_event_ids(filtered_counts.keys()):
             count = filtered_counts[eid]
-            if eid in sysmon_counts:
-                label = f"Event ID {eid} (Sysmon): {count} occurrences\n"
-            else:
-                label = f"Event ID {eid}: {count} occurrences\n"
-            output += label
+            output += f"{self._eid_label(eid, sysmon_eids)}: {count} occurrences\n"
         
         if not filtered_counts:
             output += "No events match the selected filter.\n"
@@ -1113,9 +1141,6 @@ Filtered Event ID Breakdown:
     
     def generate_results(self, file_path, results):
         """Generate formatted results string"""
-        import os
-        from datetime import datetime
-        
         # Handle display path for multiple files
         if "files from directory" in file_path:
             # Multiple files case - use display text
@@ -1155,18 +1180,11 @@ Event ID Breakdown:
         # Build a set of event IDs that actually came from the Sysmon channel.
         # This is accurate regardless of ID range — avoids false (Sysmon) tags
         # on Windows System IDs that happen to share the same number.
-        sysmon_counts = {}
-        for event in results.get('sysmon_events', []):
-            eid = event.get('event_id', '')
-            sysmon_counts[eid] = sysmon_counts.get(eid, 0) + 1
+        sysmon_eids = self._sysmon_eids(results)
 
         for eid in self.safe_sort_event_ids(results['counts'].keys()):
             count = results['counts'][eid]
-            if eid in sysmon_counts:
-                label = f"Event ID {eid} (Sysmon): {count} occurrences\n"
-            else:
-                label = f"Event ID {eid}: {count} occurrences\n"
-            output += label
+            output += f"{self._eid_label(eid, sysmon_eids)}: {count} occurrences\n"
 
         output += f"\n{'=' * 60}\n"
         output += "Analysis Complete.\n"
@@ -1208,7 +1226,6 @@ Event ID Breakdown:
             output += f"{i}. {window_str} - {len(events)} events\n"
             
             # Show event ID breakdown for this window
-            from collections import Counter
             event_counts = Counter(e['event_id'] for e in events)
             top_events = event_counts.most_common(3)
             output += "   Most common: "
@@ -1243,9 +1260,7 @@ Event ID Breakdown:
         # ── Top threats ────────────────────────────────────────────────────
         output += f"\n{'─' * 60}\n"
         output += "Top Threats (by priority):\n"
-        from analysis import MalwareAnalyzer
-        analyzer = MalwareAnalyzer()
-        top_threats = analyzer.get_top_threats(malware_analysis, top_n=5)
+        top_threats = malware_analysis.get('malware_indicators', [])[:5]
 
         for i, threat in enumerate(top_threats, 1):
             risk_icon = risk_icons.get(threat['matrix_risk'], threat['matrix_risk'])
@@ -1264,12 +1279,122 @@ Event ID Breakdown:
             else:
                 conf_display = f"{actual_conf}/4"
             
+            eid_label = f"{threat['event_id']} (Sysmon)" if threat.get('event_type') == 'Sysmon' else threat['event_id']
             output += (
-                f"\n{i}. [{risk_icon}] Event ID {threat['event_id']} - {threat['threat']}\n"
+                f"\n{i}. [{risk_icon}] Event ID {eid_label} - {threat['threat']}\n"
                 f"   Category: {threat['category']}\n"
                 f"   Impact: {impact}/4 | Confidence: {conf_display}\n"
                 f"   Occurrences: {threat['count']}\n"
             )
+
+
+        # ── Top threat evidence ────────────────────────────────────────────
+        if self.all_results:
+            # Search directly across all parsed events — not just deep dive buckets
+            # so Defender events, 1102, and other non-bucketed threats are included
+            all_events = (
+                self.all_results.get('sysmon_events', []) +
+                self.all_results.get('security_events', []) +
+                self.all_results.get('system_events', []) +
+                self.all_results.get('defender_events', [])
+            )
+
+            output += f"\n{'-' * 60}\n"
+            output += "Evidence for Top Threats:\n"
+
+            SKIP_DEDUP_KEYS = {"computer"}
+
+            def render_evidence(ev, eid):
+                """Return a list of formatted field lines for one evidence dict."""
+                lines = []
+                for key, label in FIELD_LABELS.items():
+                    value = ev.get(key)
+                    if not value or str(value).strip().lower() in ("none", "", "-"):
+                        continue
+                    if key == "process" and eid in _CREDENTIAL_EIDS:
+                        continue
+                    display_val = str(value)
+                    if display_val.startswith("S-1-") and key in ("added_user", "removed_user"):
+                        label = label.replace("User", "Member SID")
+                    if len(display_val) > 80:
+                        display_val = display_val[:77] + "..."
+                    lines.append(f"   {label:<16} {display_val}\n")
+                return lines
+
+            shown = 0
+            for threat in top_threats:
+                eid = threat['event_id']
+                # Use only the events that actually passed indicator matching.
+                # Falling back to EID-only filtering shows every process launch /
+                # file create / registry write with that ID — the root cause of the
+                # false-positive evidence display.
+                matched = threat.get('matched_events')
+                if matched is not None:
+                    matches = [e for e in matched if e.get('evidence')]
+                else:
+                    # Legacy fallback for any indicator that predates matched_events
+                    matches = [e for e in all_events if e.get('event_id') == eid and e.get('evidence')]
+                if not matches:
+                    continue
+
+                # Build evidence lines for every occurrence, deduplicating on visible fields
+                all_occurrence_lines = []
+                seen_fingerprints = set()
+                for ev in [m['evidence'] for m in matches]:
+                    lines = render_evidence(ev, eid)
+                    if not lines:
+                        continue
+                    # Fingerprint on the actual displayed content, not timestamp/computer
+                    fp = tuple(sorted(
+                        (k, v) for k, v in ev.items()
+                        if k not in SKIP_DEDUP_KEYS and v and str(v).strip().lower() not in ("none", "", "-")
+                    ))
+                    if fp in seen_fingerprints:
+                        continue
+                    seen_fingerprints.add(fp)
+                    all_occurrence_lines.append(lines)
+
+                if not all_occurrence_lines:
+                    continue  # No useful fields for any occurrence — skip block
+
+                risk_icon = risk_icons.get(threat['matrix_risk'], threat['matrix_risk'])
+                eid_label = f"{eid} (Sysmon)" if threat.get('event_type') == 'Sysmon' else eid
+                output += f"\n[{risk_icon}] {threat['threat']} (Event {eid_label}):\n"
+
+                # Service installs (7045): each service is a distinct entry —
+                # render them as grouped mini-blocks separated by a blank line.
+                # Other high-count indicators (file drops, timestomping): cap at
+                # 5 unique entries and show a summary for the rest.
+                _SERVICE_EIDS  = {'7045'}
+                _MAX_SHOW      = 5
+
+                if eid in _SERVICE_EIDS:
+                    # Group: one block per unique service path — deduplicate across
+                    # attack waves so the same service/path pair only appears once.
+                    seen_paths = set()
+                    deduped_service_lines = []
+                    for ev_raw, lines in zip([m['evidence'] for m in matches], all_occurrence_lines):
+                        svc_path = str(ev_raw.get('service_path') or '').lower().strip()
+                        if svc_path and svc_path in seen_paths:
+                            continue
+                        if svc_path:
+                            seen_paths.add(svc_path)
+                        deduped_service_lines.append(lines)
+                    for i, lines in enumerate(deduped_service_lines):
+                        if i > 0:
+                            output += "\n"
+                        output += "".join(lines)
+                else:
+                    total = len(all_occurrence_lines)
+                    for lines in all_occurrence_lines[:_MAX_SHOW]:
+                        output += "".join(lines)
+                    if total > _MAX_SHOW:
+                        output += f"   ... and {total - _MAX_SHOW} more unique occurrence(s) not shown\n"
+
+                shown += 1
+
+            if shown == 0:
+                output += "  No evidence fields extracted for top threats.\n"
 
         output += f"\n{'=' * 60}\n"
         return output
@@ -1283,7 +1408,9 @@ Event ID Breakdown:
         
         self.all_results = None
         self.malware_analysis = None
+        self.assessment_data = None
         self.timeline_data = None
+        self.deep_dive_data = None
         self.available_event_ids = []
         self.selected_event_ids = []
         
@@ -1294,6 +1421,7 @@ Event ID Breakdown:
         self.original_results = None
         self.original_malware_analysis = None
         self.original_timeline_data = None
+        self.original_deep_dive_data = None
         
         # Disable buttons
         self.filter_btn.config(state=tk.DISABLED)
@@ -1476,7 +1604,6 @@ Event ID Breakdown:
         # Helper functions
         def apply_quick_filter(hours):
             """Apply quick time filter based on hours"""
-            from datetime import datetime, timedelta
             end_time = datetime.now()
             start_time = end_time - timedelta(hours=hours)
             apply_time_filter(start_time.isoformat(), end_time.isoformat())
@@ -1485,7 +1612,6 @@ Event ID Breakdown:
         def apply_custom_range():
             """Apply custom date range filter"""
             try:
-                from datetime import datetime
                 start_str = f"{from_year.get()}-{int(from_month.get()):02d}-{int(from_day.get()):02d}T{from_hour.get()}:{from_minute.get()}:00"
                 end_str = f"{to_year.get()}-{int(to_month.get()):02d}-{int(to_day.get()):02d}T{to_hour.get()}:{to_minute.get()}:59"
                 
@@ -1518,8 +1644,6 @@ Event ID Breakdown:
             if not self.original_results:
                 return
             
-            from datetime import datetime
-            
             try:
                 # Parse start and end times
                 start_dt = datetime.fromisoformat(start_iso.replace('Z', '+00:00'))
@@ -1532,11 +1656,6 @@ Event ID Breakdown:
                 
                 # Filter each event list by time
                 filtered_results = {
-                    'file_path': self.original_results.get('file_path', ''),
-                    'file_size': self.original_results.get('file_size', 0),
-                    'file_type': self.original_results.get('file_type', 'Unknown'),
-                    'last_modified': self.original_results.get('last_modified', 'Unknown'),
-                    'total_lines': 0,
                     'total_events': 0,
                     'sysmon_events': [],
                     'security_events': [],
@@ -1550,63 +1669,25 @@ Event ID Breakdown:
                     'total_other_windows': 0,
                     'counts': {},
                     'os_version': self.original_results.get('os_version', 'Unknown'),
-                    'os_build': self.original_results.get('os_build', 'Unknown')
                 }
                 
-                # Filter Sysmon events
-                for event in self.original_results.get('sysmon_events', []):
-                    event_time_str = event['basic_info'].get('time_created', '')
-                    if event_time_str:
-                        try:
-                            event_dt = datetime.fromisoformat(event_time_str.replace('Z', '+00:00'))
-                            if start_dt <= event_dt <= end_dt:
-                                filtered_results['sysmon_events'].append(event)
-                        except:
+                # Filter each event list by time using a single helper
+                def _filter_events(event_list):
+                    out = []
+                    for event in event_list:
+                        ts = event['basic_info'].get('time_created', '')
+                        if not ts:
                             continue
-                
-                # Filter Security events
-                for event in self.original_results.get('security_events', []):
-                    event_time_str = event['basic_info'].get('time_created', '')
-                    if event_time_str:
                         try:
-                            event_dt = datetime.fromisoformat(event_time_str.replace('Z', '+00:00'))
-                            if start_dt <= event_dt <= end_dt:
-                                filtered_results['security_events'].append(event)
-                        except:
+                            if start_dt <= datetime.fromisoformat(ts.replace('Z', '+00:00')) <= end_dt:
+                                out.append(event)
+                        except (ValueError, TypeError):
                             continue
-                
-                # Filter System events
-                for event in self.original_results.get('system_events', []):
-                    event_time_str = event['basic_info'].get('time_created', '')
-                    if event_time_str:
-                        try:
-                            event_dt = datetime.fromisoformat(event_time_str.replace('Z', '+00:00'))
-                            if start_dt <= event_dt <= end_dt:
-                                filtered_results['system_events'].append(event)
-                        except:
-                            continue
-                
-                # Filter Defender events
-                for event in self.original_results.get('defender_events', []):
-                    event_time_str = event['basic_info'].get('time_created', '')
-                    if event_time_str:
-                        try:
-                            event_dt = datetime.fromisoformat(event_time_str.replace('Z', '+00:00'))
-                            if start_dt <= event_dt <= end_dt:
-                                filtered_results['defender_events'].append(event)
-                        except:
-                            continue
-                
-                # Filter Other Windows events
-                for event in self.original_results.get('other_windows_events', []):
-                    event_time_str = event['basic_info'].get('time_created', '')
-                    if event_time_str:
-                        try:
-                            event_dt = datetime.fromisoformat(event_time_str.replace('Z', '+00:00'))
-                            if start_dt <= event_dt <= end_dt:
-                                filtered_results['other_windows_events'].append(event)
-                        except:
-                            continue
+                    return out
+
+                for key in ('sysmon_events', 'security_events', 'system_events',
+                            'defender_events', 'other_windows_events'):
+                    filtered_results[key] = _filter_events(self.original_results.get(key, []))
                 
                 # Update counts
                 filtered_results['total_sysmon'] = len(filtered_results['sysmon_events'])
@@ -1620,8 +1701,6 @@ Event ID Breakdown:
                     filtered_results['total_system'] +
                     filtered_results['total_defender']
                 )
-                filtered_results['total_lines'] = filtered_results['total_events']
-                
                 # Rebuild event ID counts
                 for event in (filtered_results['sysmon_events'] + 
                              filtered_results['security_events'] + 
@@ -1633,8 +1712,6 @@ Event ID Breakdown:
                 
                 # Check if any events remain
                 if filtered_results['total_events'] == 0:
-                    # Format timestamps for better readability
-                    from datetime import datetime
                     try:
                         start_formatted = datetime.fromisoformat(start_iso.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
                         end_formatted = datetime.fromisoformat(end_iso.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
@@ -1652,31 +1729,24 @@ Event ID Breakdown:
                     return
                 
                 # Re-run analysis on filtered events
-                from analysis import analyze_malware, extract_timeline
-                import xml.etree.ElementTree as ET
+                from analysis import analyze_malware, extract_timeline, generate_assessment
                 
-                # Rebuild timeline from filtered events
-                raw_events = []
-                all_events = (filtered_results['sysmon_events'] + 
-                             filtered_results['security_events'] + 
+                # Rebuild timeline from filtered event dicts
+                all_events = (filtered_results['sysmon_events'] +
+                             filtered_results['security_events'] +
                              filtered_results['system_events'] +
                              filtered_results['defender_events'])
-                
-                for event in all_events:
-                    try:
-                        # Get the XML element from the event (stored in 'root' field)
-                        if 'root' in event and hasattr(event['root'], 'tag'):
-                            raw_events.append(ET.tostring(event['root'], encoding='unicode'))
-                    except:
-                        continue
-                
-                filtered_timeline = extract_timeline(raw_events) if raw_events else None
+
+                filtered_timeline = extract_timeline(all_events) if all_events else None
                 filtered_malware = analyze_malware(filtered_results, filtered_timeline)
-                
+                filtered_deep_dive = self.extract_deep_dive_data(filtered_results)
+
                 # Update displayed results
                 self.all_results = filtered_results
                 self.malware_analysis = filtered_malware
+                self.assessment_data = generate_assessment(filtered_malware)
                 self.timeline_data = filtered_timeline
+                self.deep_dive_data = filtered_deep_dive
                 
                 # Update available event IDs
                 self.available_event_ids = self.safe_sort_event_ids(filtered_results['counts'].keys())
@@ -1684,7 +1754,6 @@ Event ID Breakdown:
                 # Re-display results — respect any active event ID filter
                 display_path = self.selected_file if isinstance(self.selected_file, str) else f"{len(self.selected_file)} files from directory"
                 
-                from datetime import datetime
                 try:
                     start_formatted = datetime.fromisoformat(start_iso.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
                     end_formatted = datetime.fromisoformat(end_iso.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
@@ -1794,128 +1863,127 @@ Event ID Breakdown:
         )
         close_btn.pack(side=tk.RIGHT)
 
-        # Character limit notice
-        tk.Label(
-            main_frame,
-            text="Each field has a 500 character limit in the report.",
-            font=("Arial", 9),
-            bg="white",
-            fg="#6b7280"
-        ).pack(anchor='w', pady=(0, 15))
+        CHAR_LIMIT = 500
 
-        # Field 1: Reported by / How it was reported
-        tk.Label(
-            main_frame,
-            text="Reported by / How it was reported",
-            font=("Arial", 10),
-            bg="white",
-            fg="#374151"
-        ).pack(anchor='w', pady=(0, 5))
-        
-        reporter_text = tk.Text(main_frame, height=3, wrap=tk.WORD, font=("Arial", 10), relief=tk.SOLID, borderwidth=1)
-        reporter_text.pack(fill=tk.X, pady=(0, 15))
-        reporter_text.insert("1.0", "e.g., John Smith via email, Security Operations Center alert, etc.")
-        reporter_text.config(fg='gray')
-        
-        # Field 2: What was observed
-        tk.Label(
-            main_frame,
-            text="What was observed",
-            font=("Arial", 10),
-            bg="white",
-            fg="#374151"
-        ).pack(anchor='w', pady=(0, 5))
-        
-        observed_text = tk.Text(main_frame, height=3, wrap=tk.WORD, font=("Arial", 10), relief=tk.SOLID, borderwidth=1)
-        observed_text.pack(fill=tk.X, pady=(0, 15))
-        observed_text.insert("1.0", "e.g., Multiple failed login attempts, unusual network traffic, suspicious process execution, etc.")
-        observed_text.config(fg='gray')
-        
-        # Field 3: Possible cause (if known)
-        tk.Label(
-            main_frame,
-            text="Possible cause (if known)",
-            font=("Arial", 10),
-            bg="white",
-            fg="#374151"
-        ).pack(anchor='w', pady=(0, 5))
-        
-        cause_text = tk.Text(main_frame, height=3, wrap=tk.WORD, font=("Arial", 10), relief=tk.SOLID, borderwidth=1)
-        cause_text.pack(fill=tk.X, pady=(0, 15))
-        cause_text.insert("1.0", "e.g., Phishing attempt, credential compromise, malware infection, etc. (Leave blank if unknown)")
-        cause_text.config(fg='gray')
-        
-        # Field 4: Impact to Business Operations (if known)
-        tk.Label(
-            main_frame,
-            text="Impact to Business Operations (if known)",
-            font=("Arial", 10),
-            bg="white",
-            fg="#374151"
-        ).pack(anchor='w', pady=(0, 5))
-        
-        impact_text = tk.Text(main_frame, height=3, wrap=tk.WORD, font=("Arial", 10), relief=tk.SOLID, borderwidth=1)
-        impact_text.pack(fill=tk.X, pady=(0, 15))
-        impact_text.insert("1.0", "e.g., System downtime, data breach risk, productivity loss, etc. (Leave blank if unknown)")
-        impact_text.config(fg='gray')
-        
-        # Placeholder text handlers
-        def on_focus_in(text_widget, placeholder):
-            if text_widget.get("1.0", "end-1c") == placeholder:
-                text_widget.delete("1.0", tk.END)
-                text_widget.config(fg='black')
-        
-        def on_focus_out(text_widget, placeholder):
-            if text_widget.get("1.0", "end-1c").strip() == "":
-                text_widget.insert("1.0", placeholder)
-                text_widget.config(fg='gray')
-        
-        # Bind focus events
         placeholders = {
-            reporter_text: "e.g., John Smith via email, Security Operations Center alert, etc.",
-            observed_text: "e.g., Multiple failed login attempts, unusual network traffic, suspicious process execution, etc.",
-            cause_text: "e.g., Phishing attempt, credential compromise, malware infection, etc. (Leave blank if unknown)",
-            impact_text: "e.g., System downtime, data breach risk, productivity loss, etc. (Leave blank if unknown)"
+            'reporter': "e.g., John Smith via email, Security Operations Center alert, etc.",
+            'observed': "e.g., Multiple failed login attempts, unusual network traffic, suspicious process execution, etc.",
+            'cause':    "e.g., Phishing attempt, credential compromise, malware infection, etc. (Leave blank if unknown)",
+            'impact':   "e.g., System downtime, data breach risk, productivity loss, etc. (Leave blank if unknown)",
         }
-        
-        for widget, placeholder in placeholders.items():
-            widget.bind("<FocusIn>", lambda e, w=widget, p=placeholder: on_focus_in(w, p))
-            widget.bind("<FocusOut>", lambda e, w=widget, p=placeholder: on_focus_out(w, p))
-        
+
+        field_labels = [
+            ("Reported by / How it was reported", 'reporter'),
+            ("What was observed",                 'observed'),
+            ("Possible cause (if known)",          'cause'),
+            ("Impact to Business Operations (if known)", 'impact'),
+        ]
+
+        text_widgets = {}
+        counter_labels = {}
+
+        def make_field(parent, label_text, key):
+            """Build one labelled text area with a live character counter."""
+            header_row = tk.Frame(parent, bg="white")
+            header_row.pack(fill=tk.X, pady=(0, 3))
+
+            tk.Label(
+                header_row,
+                text=label_text,
+                font=("Arial", 10),
+                bg="white",
+                fg="#374151"
+            ).pack(side=tk.LEFT)
+
+            counter = tk.Label(
+                header_row,
+                text=f"0 / {CHAR_LIMIT}",
+                font=("Arial", 9),
+                bg="white",
+                fg="#6b7280"
+            )
+            counter.pack(side=tk.RIGHT)
+
+            widget = tk.Text(
+                parent, height=3, wrap=tk.WORD,
+                font=("Arial", 10), relief=tk.SOLID, borderwidth=1
+            )
+            widget.pack(fill=tk.X, pady=(0, 15))
+            widget.insert("1.0", placeholders[key])
+            widget.config(fg='gray')
+
+            text_widgets[key] = widget
+            counter_labels[key] = counter
+
+        for lbl, key in field_labels:
+            make_field(main_frame, lbl, key)
+
+        # ── Placeholder and counter logic ──────────────────────────────────────
+
+        def get_real_text(key):
+            """Return actual user text, empty string if still showing placeholder."""
+            raw = text_widgets[key].get("1.0", "end-1c")
+            return "" if raw == placeholders[key] else raw
+
+        def update_counter(key, *_):
+            length = len(get_real_text(key))
+            over   = length > CHAR_LIMIT
+            counter_labels[key].config(
+                text=f"{length} / {CHAR_LIMIT}",
+                fg="#dc2626" if over else "#6b7280"
+            )
+            refresh_generate_btn()
+
+        def refresh_generate_btn():
+            any_over = any(len(get_real_text(k)) > CHAR_LIMIT for k in placeholders)
+            if any_over:
+                generate_btn.config(
+                    state=tk.DISABLED,
+                    bg="#9ca3af",
+                    cursor="arrow"
+                )
+            else:
+                generate_btn.config(
+                    state=tk.NORMAL,
+                    bg="#2563eb",
+                    cursor="hand2"
+                )
+
+        def on_focus_in(key):
+            w = text_widgets[key]
+            if w.get("1.0", "end-1c") == placeholders[key]:
+                w.delete("1.0", tk.END)
+                w.config(fg='black')
+
+        def on_focus_out(key):
+            w = text_widgets[key]
+            if w.get("1.0", "end-1c").strip() == "":
+                w.insert("1.0", placeholders[key])
+                w.config(fg='gray')
+                counter_labels[key].config(text=f"0 / {CHAR_LIMIT}", fg="#6b7280")
+                refresh_generate_btn()
+
+        for key, widget in text_widgets.items():
+            widget.bind("<FocusIn>",  lambda e, k=key: on_focus_in(k))
+            widget.bind("<FocusOut>", lambda e, k=key: on_focus_out(k))
+            widget.bind("<KeyRelease>", lambda e, k=key: update_counter(k))
+
         # Button frame
         button_frame = tk.Frame(main_frame, bg="white")
         button_frame.pack(fill=tk.X, pady=(20, 0))
-        
+
         def on_cancel():
             result['submitted'] = False
             context_dialog.destroy()
-        
+
         def on_generate():
-            # Get values (strip placeholders if still present)
-            reporter = reporter_text.get("1.0", "end-1c").strip()
-            if reporter == placeholders[reporter_text]:
-                reporter = ""
-            
-            observed = observed_text.get("1.0", "end-1c").strip()
-            if observed == placeholders[observed_text]:
-                observed = ""
-            
-            cause = cause_text.get("1.0", "end-1c").strip()
-            if cause == placeholders[cause_text]:
-                cause = ""
-            
-            impact = impact_text.get("1.0", "end-1c").strip()
-            if impact == placeholders[impact_text]:
-                impact = ""
-            
             result['submitted'] = True
-            result['reporter'] = reporter
-            result['observed'] = observed
-            result['cause'] = cause
-            result['impact'] = impact
-            
+            result['reporter'] = get_real_text('reporter')
+            result['observed'] = get_real_text('observed')
+            result['cause']    = get_real_text('cause')
+            result['impact']   = get_real_text('impact')
             context_dialog.destroy()
-        
+
         # Cancel button
         cancel_btn = tk.Button(
             button_frame,
@@ -1931,8 +1999,8 @@ Event ID Breakdown:
             cursor="hand2"
         )
         cancel_btn.pack(side=tk.RIGHT, padx=(10, 0))
-        
-        # Generate Report button
+
+        # Generate Report button (created before refresh_generate_btn is called above)
         generate_btn = tk.Button(
             button_frame,
             text="Generate Report",
@@ -1952,6 +2020,466 @@ Event ID Breakdown:
         
         return result if result['submitted'] else None
     
+    def extract_deep_dive_data(self, results):
+        """
+        Organize parsed event evidence into categories matching the
+        Deep Dives sections of the report template (sections 6.1-6.6).
+
+        Only includes individual events whose relevant field (TargetFilename,
+        ImageLoaded, ImagePath, etc.) actually matches an indicator string from
+        the CSV — the same check performed in analysis.py.  The CSV indicator
+        strings are the sole source of truth; no exclusion lists are needed.
+        """
+        deep_dives = {
+            'suspicious_execution': [],   # 6.1 - Sysmon:1, Security:4688, Security:4104
+            'persistence_account':  [],    # 6.2a - account-based persistence (4720, 4698, 13)
+            'persistence_services':  [],    # 6.2b - service-based persistence (7045)
+            'credential_dumps':    [],    # 6.3a - Credential theft: lsass access, mimikatz, ppldump (EID 10/11 Credential Access)
+            'credential_logon':    [],    # 6.3b - Auth/logon events: DCSync 4662, 4624, 4625, 4648, 4728
+            'network_observations': [],   # 6.4 - Sysmon:3, Sysmon:22
+            'enumeration':         [],    # 6.5 - AD/share enumeration: 5145, BloodHound, PowerView
+            'av_protections': [],         # 6.6 - Defender events
+            'removable_media': [],        # 6.7 - placeholder for future USB detection
+        }
+
+        EXECUTION_IDS   = {'1', '2', '4688', '4104', '11'}  # 2 = Sysmon file creation time changed (timestomping); 11 = Sysmon file created (malware dropper)
+        PERSISTENCE_IDS = {'7045', '4698', '13', '4720'}  # 4720 = account created = persistence mechanism
+        CREDENTIAL_IDS  = {'4625', '4728', '4732', '4740', '4771', '4726'}
+        # These EIDs are too noisy/low-signal to show in credential deep dives
+        # 4672: special privileges assigned — fires on every admin logon automatically
+        CREDENTIAL_SKIP_IDS = {'4672'}
+        NETWORK_IDS     = {'3', '22'}
+
+        # Build a set of composite keys that actually fired in the threat analysis,
+        # and a lookup of ALL indicator rows per composite key for per-event routing.
+        # Format matches analysis.py: "EventType:EventID" e.g. "Sysmon:1", "Security:4625"
+        # Note: multiple indicator rows can share the same composite key (e.g. EID 10 has
+        # both a Credential Access row for lsass and a Lateral Movement row for non-lsass).
+        # We store all of them so each event can be matched to the correct row.
+        matched_keys = set()
+        # composite_key -> list of (indicator_strings, category) tuples, one per CSV row
+        indicator_rows = {}
+        if self.malware_analysis:
+            for indicator in self.malware_analysis.get('malware_indicators', []):
+                etype = indicator.get('event_type', '')
+                eid   = indicator.get('event_id', '')
+                if etype and eid:
+                    key = f"{etype}:{eid}"
+                    matched_keys.add(key)
+                    strings     = [s.lower() for s in indicator.get('indicators_to_check', [])]
+                    category    = indicator.get('category', '')
+                    finding     = indicator.get('finding', '')
+                    description = indicator.get('description', '')
+                    indicator_rows.setdefault(key, []).append((strings, category, finding, description))
+
+        all_events = (
+            results.get('sysmon_events', []) +
+            results.get('security_events', []) +
+            results.get('system_events', []) +
+            results.get('defender_events', [])
+        )
+
+        for event in all_events:
+            eid   = event.get('event_id', '')
+            etype = event.get('type', '')
+            evidence = event.get('evidence', {})
+            if not evidence:
+                continue
+
+            composite_key = f"{etype}:{eid}"
+
+            # Only include this event if its type:id combination matched a threat indicator.
+            # Defender events always go through since they are inherently security-relevant.
+            if etype != 'Defender' and composite_key not in matched_keys:
+                continue
+
+            # Drop evidence entries that carry no useful fields beyond timestamp and computer
+            meaningful_keys = set(evidence.keys()) - {'timestamp', 'computer'}
+            if not meaningful_keys:
+                continue
+
+            # Skip inherently noisy low-signal EIDs regardless of matched key
+            if eid in CREDENTIAL_SKIP_IDS:
+                continue
+
+            # ── Per-event indicator re-validation ────────────────────────────────
+            # The composite_key gate only checks whether *any* event of this type:id
+            # fired a threat indicator — not whether *this specific event* matches.
+            # Re-check each individual event's relevant field against the indicator
+            # strings from the CSV.  The CSV strings are the sole source of truth —
+            # no exclusion lists or process allowlists needed here.
+
+            data         = event.get('data', {})
+            rows_for_key = indicator_rows.get(composite_key, [])
+            all_strings  = [s for (strings, *_) in rows_for_key for s in strings]
+
+            # ── EID 2: Timestomping (no indicators — fires on every timestamp change) ──
+            # Filter out known-noisy applications that legitimately rewrite timestamps.
+            if eid == '2':
+                image = os.path.basename(str(data.get('Image') or '')).lower()
+                fp    = str(data.get('TargetFilename') or '').lower()
+                _NOISY_PROCS = {
+                    'discord.exe', 'chrome.exe', 'msedge.exe', 'firefox.exe',
+                    'brave.exe', 'code.exe', 'slack.exe', 'teams.exe',
+                    'onedrive.exe', 'dropbox.exe', 'steamwebhelper.exe',
+                    'steam.exe', 'epicgameslauncher.exe',
+                }
+                _NOISY_PATHS = ('\\appdata\\roaming\\discord\\', '\\appdata\\local\\discord\\',
+                                '\\appdata\\local\\google\\chrome\\', '\\appdata\\local\\microsoft\\edge\\')
+                if image in _NOISY_PROCS or any(p in fp for p in _NOISY_PATHS):
+                    continue
+
+            elif eid == '1':
+                image_full  = str(data.get('Image') or '').lower()
+                image       = os.path.basename(image_full)
+                cmdline     = str(data.get('CommandLine') or '').lower()
+                parent_full = str(data.get('ParentImage') or '').lower()
+                parent      = os.path.basename(parent_full)
+
+                _heuristic_match = False
+
+                # Heuristic A: suspicious spawner → recon shell
+                if parent in _EID1_SUSPICIOUS_SPAWNERS and image in _EID1_RECON_SHELLS:
+                    if not any(parent_full.startswith(r) for r in _EID1_INSTALLER_ROOTS):
+                        _heuristic_match = True
+                    elif any(d in cmdline for d in _EID1_DISCOVERY_CMDS):
+                        _heuristic_match = True
+
+                # Heuristic B: MSI .tmp extraction chain
+                if not _heuristic_match:
+                    if parent_full.endswith('.tmp') or image_full.endswith('.tmp'):
+                        if image in _EID1_RECON_SHELLS:
+                            _heuristic_match = True
+                    if parent in {'msiexec.exe'} and image in {
+                        'cmd.exe', 'whoami.exe', 'powershell.exe', 'net.exe'
+                    }:
+                        if any(d in cmdline for d in _EID1_DISCOVERY_CMDS):
+                            _heuristic_match = True
+
+                # Fall back to CSV string match if heuristic didn't fire
+                if not _heuristic_match:
+                    if all_strings and not any(s in image or s in cmdline for s in all_strings):
+                        continue
+
+            elif eid == '8':
+                target = os.path.basename(str(data.get('TargetImage') or '')).lower()
+                if all_strings and not any(s in target for s in all_strings):
+                    continue
+
+            elif eid == '10':
+                target = os.path.basename(str(data.get('TargetImage') or '')).lower()
+                source = os.path.basename(str(data.get('SourceImage') or '')).lower()
+                if all_strings and not any(s in target or s in source for s in all_strings):
+                    continue
+
+            elif eid == '11':
+                fp    = str(data.get('TargetFilename', '')).lower()
+                fname = os.path.basename(fp)
+                image = os.path.basename(str(data.get('Image') or '')).lower()
+                _EXEC_EXTS = {'.exe', '.dll', '.bat', '.ps1', '.vbs', '.scr', '.cmd', '.hta', '.js', '.jar'}
+                _PYINSTALLER_PATTERN = '\\temp\\_mei'
+                matched_11 = False
+                for ind in all_strings:
+                    if ind.endswith('\\'):
+                        if ind in fp and any(fp.endswith(ext) for ext in _EXEC_EXTS):
+                            if _PYINSTALLER_PATTERN not in fp:
+                                matched_11 = True
+                                break
+                    else:
+                        # Keyword match (mimikatz etc.) — check filename only, not full path
+                        if ind in fname:
+                            matched_11 = True
+                            break
+                if all_strings and not matched_11:
+                    continue
+
+            elif eid == '12':
+                reg_key = str(data.get('TargetObject', '')).lower()
+                if all_strings and not any(s in reg_key for s in all_strings):
+                    continue
+
+            elif eid == '13':
+                reg_key = str(data.get('TargetObject', '')).lower()
+                if all_strings and not any(s in reg_key for s in all_strings):
+                    continue
+                # Mirror the suppression logic from analysis.py so the deep dive
+                # doesn't display events that the scorer already rejected.
+                _SERVICE_SENTINEL_DD = 'currentcontrolset\\services\\'
+                if _SERVICE_SENTINEL_DD in reg_key:
+                    # Only show \ImagePath keys — everything else under \services\
+                    # (BTHPORT\FriendlyName, WinSock AppId_Catalog, etc.) is noise.
+                    if not reg_key.endswith('\\imagepath'):
+                        continue
+                    _details_dd = str(data.get('Details') or '').lower().strip('"').strip()
+                    _TRUSTED_SVC_ROOTS_DD = (
+                        'c:\\windows\\system32\\', 'c:\\windows\\syswow64\\',
+                        'c:\\windows\\', 'c:\\program files\\',
+                        'c:\\program files (x86)\\', 'c:\\programdata\\',
+                        '\\systemroot\\', '\\??\\',
+                        '%systemroot%\\', '%windir%\\',
+                        '%programfiles%\\', '%programfiles(x86)%\\',
+                        '%commonprogramfiles%\\', '%commonprogramfiles(x86)%\\',
+                    )
+                    _SUSPICIOUS_WIN_SUBDIRS_DD = (
+                        'c:\\windows\\temp\\', 'c:\\windows\\tasks\\',
+                    )
+                    if not _details_dd:
+                        continue
+                    # Suspicious Windows subdirs override the broad c:\windows\ allow
+                    if not any(_details_dd.startswith(s) for s in _SUSPICIOUS_WIN_SUBDIRS_DD):
+                        if any(_details_dd.startswith(r) for r in _TRUSTED_SVC_ROOTS_DD):
+                            continue
+                    # Trusted writers: processes that are part of Windows or OEM firmware
+                    # (wpbbin.exe = UEFI Platform Binary Table; services.exe = SCM).
+                    _image_dd2 = str(data.get('Image') or '').lower()
+                    _TRUSTED_SVC_WRITERS_DD = {
+                        # wpbbin.exe is the UEFI Platform Binary Table executor —
+                        # placed by firmware, not attacker-controllable without
+                        # physical hardware access. Its service registrations are OEM-legitimate.
+                        'c:\\windows\\system32\\wpbbin.exe',
+                    }
+                    if _image_dd2 in _TRUSTED_SVC_WRITERS_DD:
+                        continue
+                    # Per-user service instances (_XXXXXX suffix) — always suppress
+                    _svc_name_dd = reg_key.split('\\services\\', 1)[-1].split('\\')[0]
+                    if re.search(r'_[0-9a-f]{4,8}$', _svc_name_dd, re.IGNORECASE):
+                        continue
+
+            elif eid == '7':
+                dll_path = str(data.get('ImageLoaded', '')).lower()
+                _EXEC_EXTS = {'.dll'}
+                matched_7 = False
+                for ind in all_strings:
+                    ind_l = ind.lower()
+                    if ind_l.endswith('\\'):
+                        if ind_l in dll_path and any(dll_path.endswith(e) for e in _EXEC_EXTS):
+                            matched_7 = True
+                            break
+                    else:
+                        if ind_l in dll_path:
+                            matched_7 = True
+                            break
+                if all_strings and not matched_7:
+                    continue
+
+            elif eid == '7045':
+                svc_path = str(data.get('ImagePath', '')).lower()
+                if all_strings and not any(s in svc_path for s in all_strings):
+                    continue
+
+            elif eid == '3':
+                image     = os.path.basename(str(data.get('Image') or '')).lower()
+                dest_port = str(data.get('DestinationPort') or '')
+                dest_ip   = str(data.get('DestinationIp') or '').lower()
+                cmdline   = str(data.get('CommandLine') or '').lower()
+                targeted  = f"{image} :{dest_port} {dest_ip} {cmdline}"
+                if all_strings and not any(s in targeted for s in all_strings):
+                    continue
+
+            elif eid == '18':
+                pipe = str(data.get('PipeName') or '').lower()
+                if all_strings and not any(s in pipe for s in all_strings):
+                    continue
+
+            elif eid == '22':
+                query = str(data.get('QueryName') or '').lower()
+                if all_strings and not any(s in query for s in all_strings):
+                    continue
+
+            elif eid == '23':
+                fp = str(data.get('TargetFilename') or '').lower()
+                if all_strings and not any(s in fp for s in all_strings):
+                    continue
+
+            elif all_strings:
+                TARGETED_FIELDS = {
+                    'Image', 'CommandLine', 'TargetFilename', 'TargetObject',
+                    'ImageLoaded', 'PipeName', 'QueryName', 'DestinationIp',
+                    'DestinationPort', 'ImagePath', 'ServiceName',
+                    'ThreatName', 'Path', 'ObjectName',
+                    'ShareName', 'RelativeTargetName', 'IpAddress',
+                }
+                targeted = ' '.join(
+                    str(v).lower() for k, v in data.items()
+                    if v and k in TARGETED_FIELDS
+                )
+                if not any(s in targeted for s in all_strings):
+                    continue
+
+            # ── Row-matching: targeted field search for best indicator row ────
+            TARGETED_FIELDS_FOR_ROW = {
+                'Image', 'CommandLine', 'TargetFilename', 'TargetObject',
+                'ImageLoaded', 'PipeName', 'QueryName', 'DestinationIp',
+                'DestinationPort', 'ImagePath', 'ServiceName',
+                'ThreatName', 'Path', 'ObjectName', 'SourceImage', 'TargetImage',
+                'ShareName', 'RelativeTargetName', 'IpAddress',
+            }
+            ev_text = ' '.join(
+                str(v).lower() for k, v in data.items()
+                if v and k in TARGETED_FIELDS_FOR_ROW
+            )
+
+            rows_for_key = indicator_rows.get(composite_key, [])
+            matched_category    = ''
+            matched_finding     = ''
+            matched_description = ''
+            matched_any         = False
+            fallback_cat         = ''
+            fallback_finding     = ''
+            fallback_description = ''
+            fallback_set         = False
+            # Pass 1: string-matched rows win over catch-all rows.
+            for (strings, cat, finding, description) in rows_for_key:
+                if strings and any(ind in ev_text for ind in strings):
+                    matched_category    = cat
+                    matched_finding     = finding
+                    matched_description = description
+                    matched_any         = True
+                    break
+                elif not strings and not fallback_set:
+                    fallback_cat         = cat
+                    fallback_finding     = finding
+                    fallback_description = description
+                    fallback_set         = True
+            # Pass 2: no string match — use catch-all fallback
+            if not matched_any and fallback_set:
+                matched_category    = fallback_cat
+                matched_finding     = fallback_finding
+                matched_description = fallback_description
+                matched_any         = True
+
+            # Pass 3: EID 1 heuristic match — no CSV string matched but the
+            # parent-chain heuristic already accepted this event above.
+            # Use the first available row's metadata (always "Hacking Tool Launched"
+            # / Execution) and annotate the description to explain the detection.
+            if not matched_any and eid == '1' and rows_for_key:
+                strings, cat, finding, description = rows_for_key[0]
+                matched_category    = cat
+                matched_finding     = finding
+                matched_description = (
+                    "Detected via parent-chain heuristic: a suspicious spawner process "
+                    "or MSI-extracted binary launched a discovery/shell command. "
+                    "The process name was not in the named-tool indicator list — "
+                    "manual review of the process tree is recommended."
+                )
+                matched_any = True
+
+            if not matched_any:
+                continue
+
+            category = matched_category
+
+            # Route directly from the MITRE category of the matched indicator row.
+            _CATEGORY_TO_BUCKET = {
+                'Execution':            'suspicious_execution',
+                'Defense Evasion':      'suspicious_execution',
+                'Impact':               'suspicious_execution',
+                'Credential Access':    'credential_dumps',
+                'Privilege Escalation': 'credential_logon',
+                'Lateral Movement':     'network_observations',
+                'Command and Control':  'network_observations',
+                'Enumeration':          'enumeration',
+                'Discovery':            'enumeration',
+                'Persistence':          'persistence_services',
+            }
+
+            bucket = _CATEGORY_TO_BUCKET.get(category, 'suspicious_execution')
+
+            # Persistence: account-based EIDs go to account subsection
+            if bucket == 'persistence_services' and eid in ('4720', '4698'):
+                bucket = 'persistence_account'
+
+            # DCSync and auth events are logon activity, not credential dumps
+            if bucket == 'credential_dumps' and eid in ('4662', '4624', '4625', '4648', '4728', '4732', '4740', '4771'):
+                bucket = 'credential_logon'
+
+            # EID 10 (process access): only keep in credential_dumps if target is lsass.
+            # PowerShell/whoami/explorer targets are lateral movement execution, not credential theft.
+            if eid == '10' and bucket == 'credential_dumps':
+                target = evidence.get('target_image', '') or ''
+                if 'lsass' not in target.lower():
+                    bucket = 'network_observations'
+
+            if etype != 'Defender':
+                evidence['_category'] = category
+                evidence['_finding']      = matched_finding
+                evidence['_description']  = matched_description
+                deep_dives[bucket].append(evidence)
+            elif etype == 'Defender':
+                before = evidence.get('config_old_value', '')
+                after  = evidence.get('config_new_value', '')
+
+                # Drop no-op config events (before == after, nothing actually changed)
+                if before and after and before == after:
+                    continue
+
+                # Drop incomplete config events that only have one side — parse artifacts
+                # where the raw event only logged Old Value OR New Value but not both
+                has_before = bool(before)
+                has_after  = bool(after)
+                is_partial_config = (has_before != has_after) and not evidence.get('feature_change')
+                if is_partial_config:
+                    continue
+
+                # Drop re-enable events — a protection being turned back ON after
+                # being disabled is the test script or admin restoring settings,
+                # not an attacker action. The disable event is already captured.
+                feature_change = evidence.get('feature_change', '')
+                if feature_change and '-> Enabled' in feature_change:
+                    continue
+
+                # For 5007 config changes: only keep events where a
+                # security-relevant protection key was turned off.
+                # Two requirements must both be met:
+                #   1. The after-value must contain (disabled) — parser.py stamps
+                #      this on any Disable* key set to 0x1, or any non-Disable*
+                #      key set to 0x0. Either way it means the feature is now OFF.
+                #   2. The key name must be on the security-relevant allowlist —
+                #      this prevents benign internal keys like ToastOrSsoTrigger,
+                #      PlatformRollbackMethod, ServiceStartStates (update artefacts)
+                #      from appearing as attacker activity.
+                _SECURITY_RELEVANT_KEYS = {
+                    # Real-time and scanning protections
+                    'disablerealtimemonitoring', 'disablebehaviormonitoring',
+                    'disableioavprotection', 'disablescriptscanning',
+                    'disablearchivescanning', 'disableemailscanning',
+                    'disableblockatfirstseen', 'disableintrusionpreventionsystem',
+                    # AMSI / script protection
+                    'amsienable', 'enablescriptblocklogging',
+                    # Network / exploit protection
+                    'enablenetworkprotection', 'puaprotection',
+                    'mpenableexploitprotection',
+                    # Cloud / sample submission
+                    'mapsreporting', 'submitsamplesconsent',
+                    # Controlled folder access (ransomware protection)
+                    'enablecontrolledfolderaccess',
+                    # Tamper protection
+                    'tamperprotection',
+                }
+                if before or after:
+                    if after and '(disabled)' not in after:
+                        # Protection wasn't turned off — skip (re-enable or no-op)
+                        continue
+                    # Extract just the key name from "KeyName: value" format
+                    after_key = after.split(':')[0].strip().lower().replace(' ', '') if after else ''
+                    before_key = before.split(':')[0].strip().lower().replace(' ', '') if before else ''
+                    relevant_key = after_key or before_key
+                    if relevant_key and relevant_key not in _SECURITY_RELEVANT_KEYS:
+                        # Benign internal Defender config key — not attacker-relevant
+                        continue
+
+                evidence['_category']    = matched_category
+                evidence['_finding']     = matched_finding
+                evidence['_description'] = matched_description
+                deep_dives['av_protections'].append(evidence)
+            else:
+                # Catch-all: event matched a threat indicator but doesn't belong to a
+                # specific category — surface it in suspicious execution so it always
+                # appears in both the GUI and the report rather than being silently dropped.
+                deep_dives['suspicious_execution'].append(evidence)
+
+        return deep_dives
+
     def get_asset_scope_summary(self):
         """
         Extract asset and scope information from parsed events.
@@ -1965,28 +2493,24 @@ Event ID Breakdown:
         
         hostnames = set()
         ips = set()
+        all_eid3_ips = set()   # every external IP seen in Sysmon EID 3, flagged or not
         privileged_users = set()
         regular_users = set()
         domains = set()
         logon_types_raw = set()
         
-        # Track OS info from events
-        os_info = set()
-        
         # Track time range
         earliest_time = None
         latest_time = None
         
-        # Track security-relevant event IDs
-        security_relevant_events = set()
-        
         # Collect from all event types
-        all_events = []
-        all_events.extend(self.all_results.get('sysmon_events', []))
-        all_events.extend(self.all_results.get('security_events', []))
-        all_events.extend(self.all_results.get('system_events', []))
-        all_events.extend(self.all_results.get('defender_events', []))
-        all_events.extend(self.all_results.get('windows_events', []))
+        all_events = (
+            self.all_results.get('sysmon_events', []) +
+            self.all_results.get('security_events', []) +
+            self.all_results.get('system_events', []) +
+            self.all_results.get('defender_events', []) +
+            self.all_results.get('windows_events', [])
+        )
         
         # Well-known built-in/system accounts to exclude from user lists
         SYSTEM_ACCOUNTS = {
@@ -1996,11 +2520,8 @@ Event ID Breakdown:
         }
 
         for event in all_events:
-            # Track security-relevant event IDs
             event_id = event.get('event_id', '')
-            if event_id in ['4624', '4625', '4648', '4672', '4688', '4720', '4732']:
-                security_relevant_events.add(event_id)
-            
+
             # Get timestamp and hostname from basic_info (always populated by parser)
             basic_info = event.get('basic_info', {})
             time_created = basic_info.get('time_created')
@@ -2019,8 +2540,14 @@ Event ID Breakdown:
 
             # --- Extract users, domains, IPs, logon types from event data fields ---
 
-            # Logon events (Security EIDs 4624, 4625, 4648)
-            if event_id in ['4624', '4625', '4648', '4634', '4647', '4672']:
+            # Logon events — collect logon type from 4625 too, but NOT the username (account doesn't exist)
+            if event_id == '4625':
+                logon_type = event_data.get('LogonType', '')
+                if logon_type:
+                    logon_types_raw.add(logon_type)
+
+            # Logon events (Security EIDs 4624, 4648) — 4625 excluded from user/IP collection
+            if event_id in ['4624', '4648', '4634', '4647', '4672']:
                 username = event_data.get('TargetUserName') or event_data.get('SubjectUserName', '')
                 domain = event_data.get('TargetDomainName') or event_data.get('SubjectDomainName', '')
                 logon_type = event_data.get('LogonType', '')
@@ -2043,7 +2570,7 @@ Event ID Breakdown:
                     ips.add(ip_addr)
 
             # Privilege escalation / admin group membership (4732, 4728, 4756)
-            if event_id in ['4732', '4728', '4756', '4720']:
+            if event_id in ['4732', '4728', '4756']:
                 username = event_data.get('MemberName') or event_data.get('TargetUserName', '')
                 if username and '\\' in username:
                     username = username.split('\\')[-1]
@@ -2074,19 +2601,31 @@ Event ID Breakdown:
                     elif username.lower() not in SYSTEM_ACCOUNTS:
                         regular_users.add(username)
 
-                # Sysmon EID 3 = network connection (has DestinationIp)
+                # Sysmon EID 3 = network connection — only collect destination IPs
+                # from events the malware engine actually flagged as suspicious.
+                # We iterate the indicator's matched_events list directly so each
+                # IP is only included if it contributed to a real threat match,
+                # rather than collecting all external traffic (346 IPs) or gating
+                # on whether any Sysmon:3 indicator fired at all (old bug).
+                # (The actual collection happens after the loop via malware_analysis.)
+                # All external IPs (flagged or not) are captured in all_eid3_ips for context.
                 if event_id == '3':
-                    dest_ip = event_data.get('DestinationIp', '')
-                    if dest_ip and dest_ip not in ['-', '::1', '127.0.0.1', '0.0.0.0']:
-                        ips.add(dest_ip)
+                    dest = event_data.get('DestinationIp', '')
+                    if dest and dest not in ('-', '::1', '127.0.0.1', '0.0.0.0'):
+                        all_eid3_ips.add(dest)
 
-            # OS version — parser stores it in all_results (v4.0 approach)
-            if event_data.get('OSVersion'):
-                os_info.add(event_data['OSVersion'])
-            if event_data.get('ProductName'):
-                os_info.add(event_data['ProductName'])
-        
-                # Clean up domains - remove junk values and hostnames
+            # OS version — stored at results level, no per-event collection needed
+
+        # Collect flagged external IPs from Sysmon EID 3 malware indicators.
+        # Done once after the loop — no need to re-run per event.
+        if self.malware_analysis:
+            for ind in self.malware_analysis.get('malware_indicators', []):
+                if ind.get('event_type') == 'Sysmon' and str(ind.get('event_id')) == '3':
+                    for ev in ind.get('matched_events', []):
+                        dest = ev.get('data', {}).get('DestinationIp', '')
+                        if dest and dest not in ('-', '::1', '127.0.0.1', '0.0.0.0'):
+                            ips.add(dest)
+        # Clean up domains — remove junk values and hostnames
         junk_domains = {
             '-', '', 'WORKGROUP', 'NT AUTHORITY', 'Window Manager',
             'Font Driver Host', 'Builtin', 'MicrosoftAccount'
@@ -2104,7 +2643,6 @@ Event ID Breakdown:
         
         domains = cleaned_domains
 
-        
         # ==================== BUILD HUMAN-READABLE SUMMARY ====================
         
         # User summary with context
@@ -2129,20 +2667,7 @@ Event ID Breakdown:
         else:
             users_display = '<br/>'.join(user_summary_parts)
         
-        # Convert logon types to human-readable, non-technical descriptions
-        logon_type_descriptions = []
-        logon_type_map = {
-            '0': 'System',
-            '2': 'Local (at keyboard)',
-            '3': 'Network (file sharing)',
-            '4': 'Scheduled task',
-            '5': 'Windows service',
-            '7': 'Screen unlock',
-            '10': 'Remote Desktop',
-            '11': 'Offline login'
-        }
-        
-        # Categorize for simpler reporting
+        # Categorize logon types for simpler reporting
         has_local = False
         has_remote = False
         has_network = False
@@ -2175,7 +2700,8 @@ Event ID Breakdown:
         has_sysmon = self.all_results.get('total_sysmon', 0) > 0
         has_security = self.all_results.get('total_security', 0) > 0
         has_system = self.all_results.get('total_system', 0) > 0
-        
+        has_defender = self.all_results.get('total_defender', 0) > 0
+
         log_sources = []
         if has_sysmon:
             log_sources.append('Sysmon')
@@ -2183,6 +2709,8 @@ Event ID Breakdown:
             log_sources.append('Security')
         if has_system:
             log_sources.append('System')
+        if has_defender:
+            log_sources.append('Defender')
         
         return {
             'hostname': ', '.join(sorted(hostnames)) if hostnames else 'Unknown',
@@ -2190,7 +2718,7 @@ Event ID Breakdown:
             'users_logged_in': users_display,
             'privileged_user_count': len(privileged_users),
             'regular_user_count': len(regular_users),
-            'network_ips': ', '.join(sorted(ips)[:10]) if ips else 'No external network activity detected',
+            'network_ips': _format_network_ips(ips, self.malware_analysis, total_observed=len(all_eid3_ips)),
             'ip_count': len(ips) if ips else 0,
             'domains': ', '.join(sorted(domains)) if domains else 'WORKGROUP',
             'access_methods': access_methods_text,
@@ -2216,8 +2744,6 @@ Event ID Breakdown:
         asset_scope = self.get_asset_scope_summary()
         
         try:
-            from datetime import datetime
-            
             # Ask user where to save the PDF
             default_name = f"triage_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
             save_path = filedialog.asksaveasfilename(
@@ -2240,15 +2766,29 @@ Event ID Breakdown:
             else:
                 report_file_path = self.selected_file
 
-            # Generate the PDF with all analysis data
+            # Always report on the full unfiltered analysis — filters are a
+            # view-only tool and must never affect the PDF output.  Use the
+            # original_* snapshots taken at analysis time; fall back to the
+            # live attributes only if no filter has ever been applied (i.e.
+            # original_* were never stored separately from the live ones).
+            report_results    = self.original_results          or self.all_results
+            report_malware    = self.original_malware_analysis or self.malware_analysis
+            report_timeline   = self.original_timeline_data    or self.timeline_data
+            report_deep_dive  = self.original_deep_dive_data   or self.deep_dive_data
+            from analysis import generate_assessment
+            report_assessment = generate_assessment(report_malware) if report_malware else self.assessment_data
+
+            # Generate the PDF with full unfiltered analysis data
             pdf_path = create_test_pdf(
                 filename=save_path,
                 file_path=report_file_path,
-                results=self.all_results,
-                malware_analysis=self.malware_analysis,
-                timeline_data=self.timeline_data,
+                results=report_results,
+                malware_analysis=report_malware,
+                timeline_data=report_timeline,
                 incident_context=incident_context,
-                asset_scope=asset_scope  # ← NEW: Asset & Scope data
+                asset_scope=asset_scope,
+                deep_dive_data=report_deep_dive,
+                assessment_data=report_assessment
             )
             
             messagebox.showinfo(
@@ -2274,5 +2814,3 @@ Event ID Breakdown:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = TriageToolGUI(root)
-    app.run()
