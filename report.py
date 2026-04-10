@@ -1,12 +1,8 @@
 # report.py - PDF Report Generation Module for DuCharme Triage Assistant
+from collections import Counter
+from gui import WINDOWS_EVENT_DESCRIPTIONS, SYSMON_EVENT_DESCRIPTIONS
 from reportlab.platypus import (
-    SimpleDocTemplate,
-    Paragraph,
-    Spacer,
-    Table,
-    TableStyle,
-    PageBreak,
-    KeepTogether,
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether,
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.pagesizes import LETTER
@@ -16,750 +12,610 @@ from datetime import datetime
 import os
 
 
-def _truncate(text, max_chars=500, label=""):
-    """
-    Truncate a string to max_chars to prevent ReportLab table cells
-    from exceeding the page height.
-    """
-    if not text:
-        return text or ""
-    text = str(text)
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars] + " [character limit reached]"
+# ── Module-level constants ────────────────────────────────────────────────────
+
+_BRAND_BLUE = colors.HexColor('#1e40af')
+
+_RISK_COLORS = {
+    "Critical": colors.HexColor('#8B0000'),
+    "High":     colors.HexColor('#CC0000'),
+    "Medium":   colors.HexColor('#E8650A'),
+    "Low":      colors.HexColor('#2E7D32'),
+}
+
+_RISK_LABELS = {"Critical": "CRITICAL", "High": "HIGH", "Medium": "MEDIUM", "Low": "LOW"}
+
+_STANDARD_TABLE_STYLE = TableStyle([
+    ("BACKGROUND",     (0, 0), (-1, 0), _BRAND_BLUE),
+    ("TEXTCOLOR",      (0, 0), (-1, 0), colors.whitesmoke),
+    ("FONTNAME",       (0, 0), (-1, 0), "Helvetica-Bold"),
+    ("FONTSIZE",       (0, 0), (-1, -1), 9),
+    ("GRID",           (0, 0), (-1, -1), 1, colors.black),
+    ("VALIGN",         (0, 0), (-1, -1), "TOP"),
+    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+    ("LEFTPADDING",    (0, 0), (-1, -1), 8),
+    ("RIGHTPADDING",   (0, 0), (-1, -1), 8),
+    ("TOPPADDING",     (0, 0), (-1, -1), 8),
+    ("BOTTOMPADDING",  (0, 0), (-1, 0),  8),
+])
+
+_FIELD_LABELS = {
+    "timestamp": "Timestamp", "computer": "Computer", "user": "User",
+    "added_user": "Added User", "added_by": "Added By",
+    "removed_user": "Removed User", "removed_by": "Removed By",
+    "deleted_user": "Deleted User", "deleted_by": "Deleted By",
+    "process": "Process", "parent_process": "Parent Process",
+    "source_image": "Source Image", "target_image": "Target Image",
+    "command_line": "Command Line", "src_ip": "Source IP",
+    "dest_ip": "Dest IP", "dest_port": "Port", "dns_query": "DNS Query",
+    "file_path": "File Path", "logon_type": "Logon Type",
+    "task_name": "Task Name", "registry_key": "Registry Key",
+    "pipe_name": "Pipe Name", "object_name": "Object Name",
+    "image_loaded": "DLL Loaded", "service_name": "Service Name",
+    "service_path": "Service Path", "service_account": "Service Account",
+    "threat_name": "Threat", "threat_severity": "Severity",
+    "action_taken": "Action Taken", "threat_file_path": "Threat File",
+    "feature_change": "Protection Change", "config_old_value": "Config Before",
+    "config_new_value": "Config After",
+    "share_name": "Share", "relative_target": "Pipe / Path",
+}
 
 
-def create_test_pdf(filename="test_report.pdf", file_path=None, results=None, malware_analysis=None, timeline_data=None, incident_context=None, asset_scope=None):
-    """
-    Create a PDF report for the DuCharme Triage Assistant.
-    
-    Args:
-        filename: Output PDF filename
-        file_path: Path to the analyzed log file
-        results: Analysis results dictionary from parser
-        malware_analysis: Malware analysis results from analysis.py
-        timeline_data: Timeline analysis results from analysis.py
-        incident_context: Incident context information from GUI dialog
-        asset_scope: Asset and scope information from GUI
-    
-    Returns:
-        str: Path to the generated PDF file
-    """
-    # Create the document
-    doc = SimpleDocTemplate(
-        filename,
-        pagesize=LETTER,
-        rightMargin=72,
-        leftMargin=72,
-        topMargin=72,
-        bottomMargin=72,
-    )
-    
-    styles = getSampleStyleSheet()
-    story = []
-    
-    # Add custom styles
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Title'],
-        fontSize=24,
-        textColor=colors.HexColor('#1e40af'),
-        spaceAfter=6,
-        alignment=1  # Center
-    )
-    
-    subtitle_style = ParagraphStyle(
-        'CustomSubtitle',
-        parent=styles['Title'],
-        fontSize=24,
-        textColor=colors.HexColor('#1e40af'),
-        spaceAfter=30,
-        alignment=1  # Center
-    )
-    
-    heading_style = ParagraphStyle(
-        'CustomHeading',
-        parent=styles['Heading1'],
-        fontSize=14,
-        textColor=colors.HexColor('#1e40af'),
-        spaceAfter=8,
-        spaceBefore=16,
-        keepWithNext=1,
-    )
-    
-    # Title (two centered lines)
-    title = Paragraph("DuCharme Triage Assistant", title_style)
-    story.append(title)
-    subtitle = Paragraph("Analysis Report", subtitle_style)
-    story.append(subtitle)
-    story.append(Spacer(1, 0.3 * inch))
-    
-    # Report Generated timestamp
-    report_info = Paragraph(
-        f"<b>Report Generated:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", 
-        styles["BodyText"]
-    )
-    story.append(report_info)
-    story.append(Spacer(1, 0.3 * inch))
-    
-    # === SECTION 1: FILE INFORMATION ===
-    if file_path and os.path.exists(file_path):
-        # Get directory path without filename
-        directory_path = os.path.dirname(file_path)
-        
-        file_info_data = [
-            ["Property", "Value"],
-            ["File Name", os.path.basename(file_path)],
-            ["File Path", directory_path],
-            ["File Size", f"{os.path.getsize(file_path) / 1024:.2f} KB"],
-            ["Analysis Date", datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
-        ]
-        
-        file_table = Table(file_info_data, colWidths=[2*inch, 4*inch], splitByRow=False)
-        file_table.setStyle(
-            TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor('#1e40af')),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-                ("GRID", (0, 0), (-1, -1), 1, colors.black),
-                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
-                ("BACKGROUND", (0, 1), (-1, -1), colors.beige),
-            ])
-        )
-        story.append(Paragraph("1) FILE INFORMATION", heading_style))
-        story.append(Spacer(1, 8))
-        story.append(file_table)
-        story.append(Spacer(1, 0.2 * inch))
-    
-    # === SECTION 2: ASSET & SCOPE ===
-    if asset_scope:
-        asset_scope_section = generate_asset_scope_section(asset_scope, heading_style, styles, section_number=2)
-        story.extend(asset_scope_section)
-    
-    # === SECTION 3: INCIDENT CONTEXT ===
-    if incident_context:
-        incident_context_section = generate_incident_context_section(incident_context, heading_style, styles, section_number=3)
-        story.extend(incident_context_section)
-    
-    # === SECTION 4: TIMELINE ANALYSIS ===
-    if timeline_data and timeline_data.get('chronological_events'):
-        timeline_section = generate_timeline_section(timeline_data, styles, heading_style, section_number=4)
-        story.extend(timeline_section)
-    
-    # === SECTION 5: INDICATORS & SCORING ===
-    if malware_analysis:
-        indicators_section = generate_indicators_scoring_section(malware_analysis, styles, heading_style, section_number=5)
-        story.extend(indicators_section)
-    
-    # Footer
-    story.append(Spacer(1, 0.5 * inch))
-    footer = Paragraph(
-        f"<i>Generated by DuCharme Triage Assistant on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>",
-        styles["Italic"],
-    )
-    story.append(footer)
-    
-    # Build the PDF
-    doc.build(story)
-    
-    return filename
-
-
-def generate_timeline_section(timeline_data, styles, heading_style, section_number=4):
-    section_content = []
-
-    chronological = timeline_data.get('chronological_events', [])
-    grouped = timeline_data.get('grouped_events', {})
-
-    if not chronological:
-        section_content.append(KeepTogether([
-            Paragraph(f"{section_number}) TIMELINE (LAST N DAYS)", heading_style),
-            Spacer(1, 8),
-            Paragraph("<i>No timeline data available (events may not contain timestamps).</i>", styles['BodyText']),
-            Spacer(1, 16),
-        ]))
-        return section_content
-
-    summary_text = (
-        f"<b>Total Events with Timestamps:</b> {len(chronological)}<br/>"
-        f"<b>Time Windows (5 min intervals):</b> {len(grouped)}<br/>"
-        f"<b>Time Span:</b> {chronological[0]['timestamp'].strftime('%Y-%m-%d %H:%M')} to "
-        f"{chronological[-1]['timestamp'].strftime('%Y-%m-%d %H:%M')}"
-    )
-
-    # First 15 events table
-    timeline_table_data = [["#", "Timestamp", "Event ID"]]
-    for i, event in enumerate(chronological[:15], 1):
-        timestamp_str = event['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
-        timeline_table_data.append([str(i), timestamp_str, event['event_id']])
-
-    timeline_table = Table(timeline_table_data, colWidths=[0.5*inch, 2.5*inch, 1*inch], splitByRow=False)
-    timeline_table.setStyle(
-        TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor('#1e40af')),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-            ("GRID", (0, 0), (-1, -1), 1, colors.black),
-            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-            ("ALIGN", (0, 0), (0, -1), "CENTER"),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
-        ])
-    )
-
-    section_content.append(KeepTogether([
-        Paragraph(f"{section_number}) TIMELINE (LAST N DAYS)", heading_style),
-        Spacer(1, 8),
-        Paragraph(summary_text, styles['BodyText']),
-        Spacer(1, 10),
-        Paragraph("First 15 Events (Chronological)", styles['Heading3']),
-        Spacer(1, 6),
-        timeline_table,
-        Spacer(1, 16),
-    ]))
-
-    # Top 5 busiest time windows
-    sorted_windows = sorted(grouped.items(), key=lambda x: len(x[1]), reverse=True)[:5]
-
-    window_table_data = [["Rank", "Time Window", "Event Count", "Top Event IDs"]]
-    for i, (window_start, events) in enumerate(sorted_windows, 1):
-        window_str = window_start.strftime('%Y-%m-%d %H:%M')
-        event_count = len(events)
-        from collections import Counter
-        event_counts = Counter(e['event_id'] for e in events)
-        top_events = event_counts.most_common(3)
-        top_events_str = ", ".join([f"{eid}({count})" for eid, count in top_events])
-        window_table_data.append([str(i), window_str, str(event_count), top_events_str])
-
-    window_table = Table(window_table_data, colWidths=[0.5*inch, 1.5*inch, 1*inch, 2.5*inch], splitByRow=False)
-    window_table.setStyle(
-        TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor('#1e40af')),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-            ("GRID", (0, 0), (-1, -1), 1, colors.black),
-            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-            ("ALIGN", (0, 0), (0, -1), "CENTER"),
-            ("ALIGN", (2, 1), (2, -1), "CENTER"),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
-        ])
-    )
-
-    section_content.append(KeepTogether([
-        Paragraph("Top 5 Busiest Time Windows", styles['Heading3']),
-        Spacer(1, 6),
-        window_table,
-        Spacer(1, 16),
-    ]))
-
-    return section_content
-
-
-def generate_asset_scope_section(asset_scope, heading_style, styles, section_number=2):
-    """
-    Generate Asset & Scope section for the PDF report.
-    Professional format suitable for non-technical stakeholders.
-    
-    Args:
-        asset_scope: Dictionary from GUI's get_asset_scope_summary()
-        heading_style: Style for section headings
-        styles: ReportLab styles object
-        section_number: Section number to display
-    
-    Returns:
-        List of ReportLab flowables for the asset scope section
-    """
-    section_content = []
-
-    if not asset_scope:
-        no_data_text = Paragraph(
-            "<i>No asset or scope data available.</i>",
-            styles['BodyText']
-        )
-        section_content.append(no_data_text)
-        section_content.append(Spacer(1, 20))
-        return section_content
-    
-    # Create professional summary table
-    summary_data = [["Property", "Value"]]
-    
-    # Hostname
-    hostname = _truncate(asset_scope.get('hostname', 'Unknown'), 100)
-    summary_data.append([
-        Paragraph("<b>Affected System:</b>", styles['BodyText']),
-        Paragraph(hostname, styles['BodyText'])
-    ])
-
-    # OS / Version / Patch Level
-    os_version = _truncate(asset_scope.get('os_version', 'Not detected in logs'), 100)
-    summary_data.append([
-        Paragraph("<b>Operating System:</b>", styles['BodyText']),
-        Paragraph(os_version, styles['BodyText'])
-    ])
-
-    # User Accounts
-    users = asset_scope.get('users_logged_in', 'No user activity detected')
-    priv_count = asset_scope.get('privileged_user_count', 0)
-    reg_count = asset_scope.get('regular_user_count', 0)
-
-    if priv_count > 0 or reg_count > 0:
-        total_users = priv_count + reg_count
-        context_text = f"<i>{total_users} unique user account(s) detected</i><br/>{_truncate(users, 500)}"
-    else:
-        context_text = _truncate(users, 500)
-
-    summary_data.append([
-        Paragraph("<b>User Accounts:</b>", styles['BodyText']),
-        Paragraph(context_text, styles['BodyText'])
-    ])
-
-    # Network / IP Addresses
-    network_ips = asset_scope.get('network_ips', 'No external network activity detected')
-    ip_count = asset_scope.get('ip_count', 0)
-
-    if ip_count > 0:
-        network_text = _truncate(network_ips, 400)
-        if ip_count > 10:
-            network_text += f"<br/><i>({ip_count} total unique IPs detected)</i>"
-    else:
-        network_text = _truncate(network_ips, 400)
-
-    summary_data.append([
-        Paragraph("<b>Network Connections:</b>", styles['BodyText']),
-        Paragraph(network_text, styles['BodyText'])
-    ])
-
-    # Domain
-    domains = _truncate(asset_scope.get('domains', 'WORKGROUP'), 100)
-    domain_label = "Domain:" if domains != 'WORKGROUP' else "Domain/Workgroup:"
-    summary_data.append([
-        Paragraph(f"<b>{domain_label}</b>", styles['BodyText']),
-        Paragraph(domains, styles['BodyText'])
-    ])
-
-    # Access Methods
-    access_methods = _truncate(asset_scope.get('access_methods', 'No login activity detected'), 400)
-    summary_data.append([
-        Paragraph("<b>How System Was Accessed:</b>", styles['BodyText']),
-        Paragraph(access_methods, styles['BodyText'])
-    ])
-
-    # Evidence Sources
-    log_sources = _truncate(asset_scope.get('log_sources', 'Windows Event Logs'), 400)
-    summary_data.append([
-        Paragraph("<b>Evidence Sources:</b>", styles['BodyText']),
-        Paragraph(log_sources, styles['BodyText'])
-    ])
-
-    # Analysis Timeframe
-    timeframe = _truncate(asset_scope.get('analysis_timeframe', 'Unknown'), 150)
-    total_events = asset_scope.get('total_events', 0)
-    runtime_text = f"{timeframe}<br/><i>Total Events Analyzed: {total_events:,}</i>"
-    summary_data.append([
-        Paragraph("<b>Analysis Timeframe:</b>", styles['BodyText']),
-        Paragraph(runtime_text, styles['BodyText'])
-    ])
-    
-    # Create the table
-    summary_table = Table(summary_data, colWidths=[2.2*inch, 4.3*inch], splitByRow=False)
-    summary_table.setStyle(
-        TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor('#1e40af')),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-            ("GRID", (0, 0), (-1, -1), 1, colors.black),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
-            ("LEFTPADDING", (0, 0), (-1, -1), 8),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-            ("TOPPADDING", (0, 0), (-1, -1), 8),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-        ])
-    )
-
-    section_content.append(KeepTogether([
-        Paragraph(f"{section_number}) ASSET & SCOPE", heading_style),
-        Spacer(1, 8),
-        summary_table,
-        Spacer(1, 16),
-    ]))
-
-    return section_content
-
-
-def generate_incident_context_section(incident_context, heading_style, styles, section_number=3):
-    """
-    Generate Incident Context section for the PDF report.
-    
-    Args:
-        incident_context: Dictionary containing incident context information
-        heading_style: Style for section headings
-        styles: ReportLab styles object
-        section_number: Section number to display
-    
-    Returns:
-        List of ReportLab flowables for the incident context section
-    """
-    section_content = []
-
-    if not incident_context:
-        section_content.append(KeepTogether([
-            Paragraph(f"{section_number}) INCIDENT CONTEXT (INPUT)", heading_style),
-            Spacer(1, 10),
-            Paragraph("<i>No incident context information provided.</i>", styles['BodyText']),
-            Spacer(1, 20),
-        ]))
-        return section_content
-    
-    context_data = [["Field", "Information"]]
-    
-    # Add incident context fields - MATCHES GUI field names (reporter, observed, cause, impact)
-    context_fields = {
-        'reporter': 'How was this incident reported?',
-        'observed': 'What was observed?',
-        'cause': 'Suspected cause (if known)',
-        'impact': 'Impact on business/operations'
-    }
-    
-    for field_key, field_label in context_fields.items():
-        if incident_context.get(field_key):
-            value = _truncate(str(incident_context[field_key]), 500)
-            context_data.append([Paragraph(field_label, styles['BodyText']), Paragraph(value, styles['BodyText'])])
-    
-    if len(context_data) > 1:  # Has data beyond header
-        context_table = Table(context_data, colWidths=[2*inch, 4*inch], splitByRow=False)
-        context_table.setStyle(
-            TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor('#1e40af')),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-                ("GRID", (0, 0), (-1, -1), 1, colors.black),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), 9),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
-                ("WORDWRAP", (0, 0), (-1, -1), True),
-            ])
-        )
-        section_content.append(KeepTogether([
-            Paragraph(f"{section_number}) INCIDENT CONTEXT (INPUT)", heading_style),
-            Spacer(1, 8),
-            context_table,
-            Spacer(1, 16),
-        ]))
-    else:
-        section_content.append(KeepTogether([
-            Paragraph(f"{section_number}) INCIDENT CONTEXT (INPUT)", heading_style),
-            Spacer(1, 8),
-            Paragraph("<i>No incident context data available.</i>", styles['BodyText']),
-            Spacer(1, 16),
-        ]))
-
-    return section_content
-
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _get_event_description(event_id, prefer_sysmon=False):
-    """
-    Return a plain-English description for a Windows or Sysmon Event ID.
-    Pass prefer_sysmon=True for indicators sourced from the malware/Sysmon CSV
-    so that overlapping IDs (e.g. 10) resolve to the Sysmon meaning.
-    """
-    windows_events = {
-        '1': 'A system error occurred',
-        '6': 'A driver was loaded',
-        '7': 'A service was started or stopped',
-        '10': 'A COM+ catalog error occurred',
-        '11': 'A disk controller error was detected',
-        '12': 'The Service Control Manager started',
-        '13': 'The Service Control Manager stopped',
-        '15': 'A disk device error occurred',
-        '41': 'The computer restarted unexpectedly',
-        '42': 'The computer is entering sleep mode',
-        '51': 'A disk paging error occurred',
-        '55': 'A file system corruption was detected',
-        '104': 'The System log was cleared',
-        '107': 'The computer woke up from sleep',
-        '109': 'A kernel power transition occurred',
-        '1001': 'A Windows Error Reporting crash occurred',
-        '1014': 'A DNS client resolution timeout occurred',
-        '1100': 'Event logging was shut down',
-        '1101': 'Audit events were dropped',
-        '1102': 'The Security audit log was cleared',
-        '1530': 'A user profile could not be loaded',
-        '6005': 'The Event Log service started',
-        '6006': 'The Event Log service stopped',
-        '6008': 'An unexpected system shutdown occurred',
-        '6009': 'System boot information was logged',
-        '6013': 'System uptime was recorded',
-        '7000': 'A service failed to start',
-        '7001': 'A service depends on another service that failed',
-        '7009': 'A service timeout occurred during startup',
-        '7011': 'A service timeout occurred during operation',
-        '7022': 'A service hung on starting',
-        '7023': 'A service terminated with an error',
-        '7024': 'A service terminated with a service-specific error',
-        '7026': 'A boot-start or system-start driver failed to load',
-        '7030': 'A service was configured incorrectly',
-        '7031': 'A service terminated unexpectedly',
-        '7032': 'The Service Control Manager attempted corrective action',
-        '7034': 'A service crashed unexpectedly',
-        '7035': 'A service control was sent',
-        '7036': 'A service entered running or stopped state',
-        '7040': 'A service startup type was changed',
-        '7045': 'A new service was installed',
-        '4103': 'A PowerShell script was executed',
-        '4104': 'A PowerShell command was executed',
-        '4105': 'A PowerShell script started',
-        '4106': 'A PowerShell script stopped',
-        '4616': 'The system time was changed',
-        '4624': 'A user successfully logged in',
-        '4625': 'A user failed to log in',
-        '4634': 'A user session ended',
-        '4647': 'A user logged out',
-        '4648': 'A user logged in with different credentials',
-        '4656': 'A file or folder was accessed',
-        '4657': 'A system setting was changed',
-        '4663': 'A file or folder was accessed',
-        '4670': 'File or folder permissions were changed',
-        '4672': 'A user was given special access rights',
-        '4673': 'A privileged operation was attempted',
-        '4688': 'A program was started',
-        '4689': 'A program was closed',
-        '4698': 'A scheduled task was created',
-        '4699': 'A scheduled task was deleted',
-        '4700': 'A scheduled task was enabled',
-        '4701': 'A scheduled task was disabled',
-        '4702': 'A scheduled task was updated',
-        '4719': 'An audit policy was changed',
-        '4720': 'A user account was created',
-        '4722': 'A user account was enabled',
-        '4723': 'A password change was attempted',
-        '4724': 'A password reset was attempted',
-        '4725': 'A user account was disabled',
-        '4726': 'A user account was deleted',
-        '4728': 'A user was added to a global security group',
-        '4732': 'A user was added to a local security group',
-        '4733': 'A user was removed from a group',
-        '4735': 'A security group was changed',
-        '4737': 'A global security group was changed',
-        '4738': 'A user account was modified',
-        '4740': 'A user account was locked',
-        '4755': 'A universal security group was changed',
-        '4756': 'A user was added to a universal group',
-        '4757': 'A user was removed from a universal group',
-        '4765': 'A security identifier history was added',
-        '4767': 'A user account was unlocked',
-        '4768': 'A Kerberos login ticket was requested',
-        '4769': 'A Kerberos service ticket was requested',
-        '4771': 'A Kerberos pre-authentication failed',
-        '4776': 'A login attempt was validated',
-        '4778': 'A remote session was reconnected',
-        '4779': 'A remote session was disconnected',
-        '4794': 'A password recovery mode was attempted',
-        '5136': 'A directory object was modified',
-        '5137': 'A directory object was created',
-        '5140': 'A network folder was accessed',
-        '5141': 'A directory object was deleted',
-        '5142': 'A network folder was shared',
-        '5145': 'A network folder access was checked',
-    }
-
-    sysmon_events = {
-        '1': 'A process was created',
-        '2': 'A file creation timestamp was modified',
-        '3': 'A network connection was initiated by a process',
-        '4': 'Sysmon service state changed',
-        '5': 'A process was terminated',
-        '6': 'A driver was loaded into the kernel',
-        '7': 'A DLL or library file was loaded by a process',
-        '8': 'A process injected code into another process',
-        '9': 'A process performed raw disk access',
-        '10': 'A process opened another process\'s memory',
-        '11': 'A file was created on disk',
-        '12': 'A registry key or value was created or deleted',
-        '13': 'A registry value was modified',
-        '14': 'A registry key or value was renamed',
-        '15': 'A file alternate data stream was created',
-        '16': 'Sysmon configuration was changed',
-        '17': 'A named pipe was created',
-        '18': 'A named pipe connection was made',
-        '19': 'A WMI event filter was registered',
-        '20': 'A WMI event consumer was registered',
-        '21': 'A WMI consumer was bound to a filter',
-        '22': 'A DNS query was made by a process',
-        '23': 'A file was deleted',
-        '24': 'Clipboard contents were read by a process',
-        '25': 'A process image was tampered with',
-        '26': 'A file deletion was detected and logged',
-        '27': 'A blocked executable was prevented from running',
-        '28': 'A file shred attempt was blocked',
-        '29': 'An executable file was detected on disk',
-    }
-
-    if prefer_sysmon:
-        if event_id in sysmon_events:
-            return sysmon_events[event_id]
-        elif event_id in windows_events:
-            return windows_events[event_id]
-    else:
-        if event_id in windows_events:
-            return windows_events[event_id]
-        elif event_id in sysmon_events:
-            return sysmon_events[event_id]
-
-    return "An event was recorded"
-
-
-def _get_risk_color(matrix_risk):
-    """Return a color for a given matrix risk level."""
-    return {
-        "Critical": colors.HexColor('#8B0000'),  # dark red
-        "High":     colors.HexColor('#CC0000'),  # bright red
-        "Medium":   colors.HexColor('#B8860B'),  # dark goldenrod - readable on white
-        "Low":      colors.HexColor('#2E7D32'),  # green
-    }.get(matrix_risk, colors.black)
+    """Return a plain-English description for a Windows or Sysmon Event ID."""
+    primary   = SYSMON_EVENT_DESCRIPTIONS if prefer_sysmon else WINDOWS_EVENT_DESCRIPTIONS
+    secondary = WINDOWS_EVENT_DESCRIPTIONS if prefer_sysmon else SYSMON_EVENT_DESCRIPTIONS
+    return primary.get(event_id) or secondary.get(event_id) or "An event was recorded"
 
 
 def _build_confidence_display(indicator):
-    """
-    Mirror the GUI confidence display logic exactly.
-    Returns a plain string like:
-      '2/4 → 3/4 (high event frequency)'  (boosted)
-      '3/4'                                 (not boosted)
-    """
-    base_conf   = indicator.get('base_confidence', '?')
-    actual_conf = indicator.get('actual_confidence', base_conf)
+    """Return confidence string, annotating boosts: '2/4 -> 3/4 (reason)'."""
+    base_conf     = indicator.get('base_confidence', '?')
+    actual_conf   = indicator.get('actual_confidence', base_conf)
     boost_reasons = indicator.get('boost_reasons', [])
-
     if actual_conf > base_conf and boost_reasons:
-        reason_text = " + ".join(boost_reasons)
-        return f"{base_conf}/4 → {actual_conf}/4 ({reason_text})"
+        return f"{base_conf}/4 -> {actual_conf}/4 ({' + '.join(boost_reasons)})"
     return f"{actual_conf}/4"
 
 
-def generate_indicators_scoring_section(malware_analysis_results, styles, heading_style, section_number=5):
-    """
-    Generate Indicators & Scoring section for malware events.
-    Displays Impact / Confidence scores (replacing CVSS) and mirrors the
-    GUI's confidence-boost annotation format.
+def _make_styles(styles):
+    """Build and return the shared custom ParagraphStyles used across sections."""
+    heading = ParagraphStyle(
+        'CustomHeading', parent=styles['Heading1'], fontSize=14,
+        textColor=_BRAND_BLUE, spaceAfter=8, spaceBefore=16, keepWithNext=1,
+    )
+    body   = ParagraphStyle('ReportBody',   parent=styles['BodyText'], fontSize=10, leading=15, spaceAfter=6)
+    bullet = ParagraphStyle('ReportBullet', parent=styles['BodyText'], fontSize=10, leading=15, leftIndent=16, spaceAfter=2)
+    label  = ParagraphStyle('ReportLabel',  parent=styles['BodyText'], fontSize=10, leading=16, spaceBefore=4)
+    return heading, body, bullet, label
 
-    Args:
-        malware_analysis_results: Dictionary from MalwareAnalyzer.analyze_for_malware()
-        styles: ReportLab styles object
-        heading_style: Style for section headings
-        section_number: Section number to display
 
-    Returns:
-        List of ReportLab flowables (Paragraphs, Tables, Spacers) for the section
-    """
-    section_content = []
+# ── Main entry point ──────────────────────────────────────────────────────────
 
-    # Indicators already sorted by matrix risk (Critical first) from analysis.py
+def create_test_pdf(filename="test_report.pdf", file_path=None, results=None,
+                    malware_analysis=None, timeline_data=None, incident_context=None,
+                    asset_scope=None, deep_dive_data=None, assessment_data=None):
+    doc = SimpleDocTemplate(filename, pagesize=LETTER,
+                            rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)
+    base_styles = getSampleStyleSheet()
+    heading_style, body_style, bullet_style, label_style = _make_styles(base_styles)
+
+    now_str        = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    title_style    = ParagraphStyle('CustomTitle',    parent=base_styles['Title'],
+                                    fontSize=24, textColor=_BRAND_BLUE, spaceAfter=6,  alignment=1)
+    subtitle_style = ParagraphStyle('CustomSubtitle', parent=base_styles['Title'],
+                                    fontSize=24, textColor=_BRAND_BLUE, spaceAfter=30, alignment=1)
+
+    story = [
+        Paragraph("DuCharme Triage Assistant", title_style),
+        Paragraph("Analysis Report", subtitle_style),
+        Spacer(1, 0.3 * inch),
+
+    ]
+
+    shared = (heading_style, body_style, bullet_style, label_style, base_styles)
+
+    if malware_analysis:
+        story.extend(generate_executive_summary_section(malware_analysis, assessment_data, *shared, section_number=1))
+    if file_path and os.path.exists(file_path):
+        story.extend(_file_info_section(file_path, heading_style, section_number=2))
+    if asset_scope:
+        story.extend(generate_asset_scope_section(asset_scope, heading_style, base_styles, section_number=3))
+    if incident_context:
+        story.extend(generate_incident_context_section(incident_context, heading_style, base_styles, section_number=4))
+
+    sysmon_eids = {e.get('event_id') for e in (results.get('sysmon_events', []) if results else [])}
+    if timeline_data and timeline_data.get('chronological_events'):
+        story.extend(generate_timeline_section(timeline_data, base_styles, heading_style, section_number=5, sysmon_eids=sysmon_eids))
+    if malware_analysis:
+        story.extend(generate_indicators_scoring_section(malware_analysis, base_styles, heading_style, section_number=6))
+    if deep_dive_data:
+        story.extend(generate_deep_dives_section(deep_dive_data, heading_style, base_styles, section_number=7))
+    if assessment_data:
+        story.append(Spacer(1, 20))
+        story.extend(generate_assessment_actions_section(assessment_data, malware_analysis, heading_style, body_style, bullet_style, section_number=8))
+
+    story += [
+        Spacer(1, 0.5 * inch),
+        Paragraph(f"<i>Generated by DuCharme Triage Assistant on {now_str}</i>", base_styles["Italic"]),
+    ]
+    doc.build(story)
+    return filename
+
+
+def _file_info_section(file_path, heading_style, section_number=2):
+    """Build the File Information section flowables."""
+    if os.path.isdir(file_path):
+        evtx_files = [os.path.join(file_path, f) for f in os.listdir(file_path) if f.lower().endswith('.evtx')]
+        total_kb   = sum(os.path.getsize(f) for f in evtx_files if os.path.isfile(f)) / 1024
+        file_name  = os.path.basename(file_path) or file_path
+        size_str   = f"{total_kb:.2f} KB ({len(evtx_files)} log file(s))"
+        dir_path   = file_path
+    else:
+        file_name = os.path.basename(file_path)
+        dir_path  = os.path.dirname(file_path)
+        size_str  = f"{os.path.getsize(file_path) / 1024:.2f} KB"
+
+    _cs = ParagraphStyle('FICell', fontSize=9, leading=13, fontName='Helvetica')
+    _hs = ParagraphStyle('FIHdr',  fontSize=9, leading=13, fontName='Helvetica-Bold',
+                         textColor=colors.whitesmoke)
+    def _p(text, s=_cs):
+        safe = (str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('\\', '&#92;'))
+        return Paragraph(safe, s)
+
+    data = [
+        [_p("Property", _hs), _p("Value", _hs)],
+        [_p("File Name"),     _p(file_name)],
+        [_p("File Path"),     _p(dir_path)],
+        [_p("File Size"),     _p(size_str)],
+        [_p("Analysis Date"), _p(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))],
+    ]
+    table = Table(data, colWidths=[1.4*inch, 5.1*inch], splitByRow=False)
+    table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0), _BRAND_BLUE),
+        ("GRID",          (0, 0), (-1, -1), 1, colors.black),
+        ("ALIGN",         (0, 0), (-1, -1), "LEFT"),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING",    (0, 0), (-1, -1), 6),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
+        ("BACKGROUND",    (0, 1), (-1, -1), colors.beige),
+    ]))
+    return [Paragraph(f"{section_number}) FILE INFORMATION", heading_style),
+            Spacer(1, 8), table, Spacer(1, 0.2 * inch)]
+
+
+# ── Section generators ────────────────────────────────────────────────────────
+
+def generate_executive_summary_section(malware_analysis, assessment_data,
+                                       heading_style, body_style, bullet_style,
+                                       label_style, styles, section_number=1):
+    """Section 1: Executive Summary."""
+    risk_level   = malware_analysis.get('risk_level', 'Unknown')
+    highest_conf = malware_analysis.get('highest_confidence', 0)
+    indicators   = malware_analysis.get('malware_indicators', [])
+    risk_color   = _RISK_COLORS.get(risk_level, colors.black)
+
+    verdict    = {'Critical': 'Likely Malicious', 'High': 'Likely Malicious',
+                  'Medium': 'Suspicious', 'Low': 'Likely Benign'}.get(risk_level, 'Undetermined')
+    confidence = f"{({4:'High',3:'High',2:'Medium',1:'Low',0:'Low'}.get(highest_conf,'Low'))} ({highest_conf}/4)"
+    why_lines  = [ind.get('description', '').strip() for ind in indicators if ind.get('description','').strip()] \
+                 or ["No threat indicators matched in the analyzed logs."]
+    next_action = ((assessment_data or {}).get('immediate_actions') or ["Review logs manually to determine scope."])[0]
+    hex_color   = risk_color.hexval() if hasattr(risk_color, 'hexval') else '000000'
+
+    block = [
+        Paragraph(f"{section_number}) EXECUTIVE SUMMARY", heading_style),
+        Spacer(1, 10),
+        Paragraph(f"<b>Verdict:</b>  <font color='#{hex_color}'>{verdict} ({risk_level})</font>", label_style),
+        Paragraph(f"<b>Confidence:</b>  {confidence}", label_style),
+        Spacer(1, 6),
+        Paragraph("<b>Why:</b>", label_style),
+    ]
+    block += [Paragraph(f"- {line}", bullet_style) for line in why_lines]
+    block += [
+        Spacer(1, 6),
+        Paragraph(f"<b>Recommended Next Action:</b>  {next_action}", label_style),
+        Spacer(1, 6),
+        Paragraph(f"<b>Generated On:</b>  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", label_style),
+        Spacer(1, 16),
+    ]
+    return [KeepTogether(block), PageBreak()]
+
+
+def generate_assessment_actions_section(assessment_data, malware_analysis,
+                                        heading_style, body_style, bullet_style,
+                                        section_number=8):
+    """Section 8: Assessment & Actions."""
+    if not assessment_data:
+        return [KeepTogether([
+            Paragraph(f"{section_number}) ASSESSMENT & ACTIONS", heading_style),
+            Spacer(1, 8),
+            Paragraph("<i>No assessment data available.</i>", body_style),
+            Spacer(1, 16),
+        ])]
+
+    risk_level = (malware_analysis or {}).get('risk_level', 'Unknown')
+    risk_color = _RISK_COLORS.get(risk_level, colors.black)
+    risk_label_style = ParagraphStyle('AssessRisk', parent=body_style,
+                                      fontSize=11, textColor=risk_color, spaceAfter=8)
+    sub_style = ParagraphStyle('AssessSubHead', parent=body_style,
+                               fontSize=11, textColor=_BRAND_BLUE, spaceBefore=8, spaceAfter=4)
+
+    narrative         = assessment_data.get('narrative', [])
+    immediate_actions = assessment_data.get('immediate_actions', [])
+    followups         = assessment_data.get('followups', [])
+
+    # Anchor: heading + risk level + first narrative paragraph kept together
+    # to prevent an orphaned heading. Everything else flows freely.
+    anchor = [
+        Paragraph(f"{section_number}) ASSESSMENT & ACTIONS", heading_style),
+        Spacer(1, 6),
+        Paragraph(f"<b>Overall Risk Level: {risk_level}</b>", risk_label_style),
+    ]
+    if narrative:
+        anchor.append(Paragraph(f"<b>{section_number}.1  Assessment</b>", sub_style))
+        anchor.append(Paragraph(narrative[0].strip(), body_style))
+
+    content = [KeepTogether(anchor)]
+
+    if narrative:
+        content += [Paragraph(p.strip(), body_style) for p in narrative[1:] if p.strip()]
+        content.append(Spacer(1, 6))
+    if immediate_actions:
+        content.append(Paragraph(f"<b>{section_number}.2  Immediate Actions</b>", sub_style))
+        content += [Paragraph(f"&#9632;  {a.strip()}", bullet_style) for a in immediate_actions if a.strip()]
+        content.append(Spacer(1, 6))
+    if followups:
+        content.append(Paragraph(f"<b>{section_number}.3  Follow-Ups</b>", sub_style))
+        content += [Paragraph(f"&#9632;  {f.strip()}", bullet_style) for f in followups if f.strip()]
+        content.append(Spacer(1, 16))
+
+    return content
+
+
+def generate_asset_scope_section(asset_scope, heading_style, styles, section_number=3):
+    """Section 3: Asset & Scope."""
+    if not asset_scope:
+        return [Paragraph("<i>No asset or scope data available.</i>", styles['BodyText']), Spacer(1, 20)]
+
+    priv_count   = asset_scope.get('privileged_user_count', 0)
+    reg_count    = asset_scope.get('regular_user_count', 0)
+    users        = asset_scope.get('users_logged_in', 'No user activity detected')
+    users_text   = users
+    ip_count     = asset_scope.get('ip_count', 0)
+    network_ips  = asset_scope.get('network_ips', 'No suspicious external network activity detected')
+    network_text = (network_ips + f"<br/><i>({ip_count} total unique IPs detected)</i>") if ip_count > 10 else network_ips
+    domains      = asset_scope.get('domains', 'WORKGROUP')
+    body_st      = styles['BodyText']
+
+    rows = [
+        ["Property", "Value"],
+        ["Affected System",         asset_scope.get('hostname', 'Unknown')],
+        ["Operating System",        asset_scope.get('os_version', 'Not detected in logs')],
+        ["User Accounts",           users_text],
+        ["Network Connections",     network_text],
+        [f"{'Domain' if domains != 'WORKGROUP' else 'Domain/Workgroup'}:", domains],
+        ["How System Was Accessed", asset_scope.get('access_methods', 'No login activity detected')],
+        ["Evidence Sources",        asset_scope.get('log_sources', 'Windows Event Logs')],
+        ["Analysis Timeframe",      f"{asset_scope.get('analysis_timeframe', 'Unknown')}<br/>"
+                                    f"<i>Total Events Analyzed: {asset_scope.get('total_events', 0):,}</i>"],
+    ]
+    table_data = [[Paragraph(f"<b>{r[0]}</b>", body_st), Paragraph(str(r[1]), body_st)] if i > 0
+                  else r for i, r in enumerate(rows)]
+    table = Table(table_data, colWidths=[2.2*inch, 4.3*inch], splitByRow=False)
+    table.setStyle(_STANDARD_TABLE_STYLE)
+    return [KeepTogether([
+        Paragraph(f"{section_number}) ASSET & SCOPE", heading_style),
+        Spacer(1, 8), table, Spacer(1, 16),
+    ])]
+
+
+def generate_incident_context_section(incident_context, heading_style, styles, section_number=4):
+    """Section 4: Incident Context."""
+    title   = Paragraph(f"{section_number}) INCIDENT CONTEXT (INPUT)", heading_style)
+    body_st = styles['BodyText']
+    no_data = Paragraph("<i>No context was entered before report was generated.</i>", body_st)
+
+    if not incident_context:
+        return [KeepTogether([title, Spacer(1, 10), no_data, Spacer(1, 20)])]
+
+    context_fields = {
+        'reporter': 'How was this incident reported?',
+        'observed': 'What was observed?',
+        'cause':    'Suspected cause (if known)',
+        'impact':   'Impact on business/operations',
+    }
+    rows = [["Field", "Information"]] + [
+        [Paragraph(label, body_st), Paragraph(str(incident_context[key]), body_st)]
+        for key, label in context_fields.items() if incident_context.get(key)
+    ]
+    if len(rows) == 1:
+        return [KeepTogether([title, Spacer(1, 8), no_data, Spacer(1, 16)])]
+
+    table = Table(rows, colWidths=[2*inch, 4*inch], splitByRow=False)
+    table.setStyle(TableStyle([
+        ("BACKGROUND",     (0, 0), (-1, 0), _BRAND_BLUE),
+        ("TEXTCOLOR",      (0, 0), (-1, 0), colors.whitesmoke),
+        ("GRID",           (0, 0), (-1, -1), 1, colors.black),
+        ("FONTNAME",       (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE",       (0, 0), (-1, -1), 9),
+        ("VALIGN",         (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+        ("WORDWRAP",       (0, 0), (-1, -1), True),
+    ]))
+    return [KeepTogether([title, Spacer(1, 8), table, Spacer(1, 16)])]
+
+
+def generate_timeline_section(timeline_data, styles, heading_style, section_number=5, sysmon_eids=None):
+    """Section 5: Timeline Analysis."""
+    sysmon_eids   = sysmon_eids or set()
+    chronological = timeline_data.get('chronological_events', [])
+    grouped       = timeline_data.get('grouped_events', {})
+
+    if not chronological:
+        return [KeepTogether([
+            Paragraph(f"{section_number}) TIMELINE", heading_style),
+            Spacer(1, 8),
+            Paragraph("<i>No timeline data available (events may not contain timestamps).</i>", styles['BodyText']),
+            Spacer(1, 16),
+        ])]
+
+    def eid_label(eid):
+        return f"{eid} (Sysmon)" if eid in sysmon_eids else eid
+
+    first, last  = chronological[0]['timestamp'], chronological[-1]['timestamp']
+    summary_text = (
+        f"<b>Total Events with Timestamps:</b> {len(chronological)}<br/>"
+        f"<b>Time Windows (5 min intervals):</b> {len(grouped)}<br/>"
+        f"<b>Time Span:</b> {first.strftime('%Y-%m-%d %H:%M')} to {last.strftime('%Y-%m-%d %H:%M')}"
+    )
+
+    _shared_tl_style = TableStyle([
+        ("BACKGROUND",     (0, 0), (-1, 0), _BRAND_BLUE),
+        ("TEXTCOLOR",      (0, 0), (-1, 0), colors.whitesmoke),
+        ("GRID",           (0, 0), (-1, -1), 1, colors.black),
+        ("ALIGN",          (0, 0), (-1, -1), "LEFT"),
+        ("ALIGN",          (0, 0), (0, -1),  "CENTER"),
+        ("FONTNAME",       (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",       (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING",  (0, 0), (-1, 0),  8),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+    ])
+
+    tl_data  = [["#", "Timestamp", "Event ID"]] + [
+        [str(i), e['timestamp'].strftime('%Y-%m-%d %H:%M:%S'), eid_label(e['event_id'])]
+        for i, e in enumerate(chronological[:15], 1)
+    ]
+    tl_table = Table(tl_data, colWidths=[0.5*inch, 2.5*inch, 1*inch], splitByRow=False)
+    tl_table.setStyle(_shared_tl_style)
+
+    win_small = ParagraphStyle('WindowCell', parent=styles['BodyText'], fontSize=9, leading=11, wordWrap='LTR')
+    win_hdr   = ParagraphStyle('WindowHdr',  parent=win_small, textColor=colors.whitesmoke)
+    sorted_windows = sorted(grouped.items(), key=lambda x: len(x[1]), reverse=True)[:5]
+
+    win_data = [[Paragraph(f"<b>{h}</b>", win_hdr) for h in ("Rank", "Time Window", "Count", "Top Event IDs")]]
+    for i, (window_start, events) in enumerate(sorted_windows, 1):
+        top_str = ", ".join(f"{eid_label(eid)} x{c}" for eid, c in Counter(e['event_id'] for e in events).most_common(3))
+        win_data.append([
+            Paragraph(str(i), win_small),
+            Paragraph(window_start.strftime('%Y-%m-%d %H:%M'), win_small),
+            Paragraph(str(len(events)), win_small),
+            Paragraph(top_str, win_small),
+        ])
+    win_table = Table(win_data, colWidths=[0.5*inch, 1.5*inch, 0.8*inch, 3.7*inch], splitByRow=False)
+    win_table.setStyle(TableStyle([
+        ("BACKGROUND",     (0, 0), (-1, 0), _BRAND_BLUE),
+        ("TEXTCOLOR",      (0, 0), (-1, 0), colors.whitesmoke),
+        ("GRID",           (0, 0), (-1, -1), 1, colors.black),
+        ("ALIGN",          (0, 0), (-1, -1), "LEFT"),
+        ("ALIGN",          (0, 0), (0, -1),  "CENTER"),
+        ("ALIGN",          (2, 1), (2, -1),  "CENTER"),
+        ("FONTNAME",       (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",       (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING",  (0, 0), (-1, 0),  8),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+    ]))
+
+    date_range = first.strftime('%Y-%m-%d') if first.date() == last.date() \
+                 else f"{first.strftime('%Y-%m-%d')} to {last.strftime('%Y-%m-%d')}"
+    return [
+        KeepTogether([
+            Paragraph(f"{section_number}) TIMELINE ({date_range})", heading_style),
+            Spacer(1, 8), Paragraph(summary_text, styles['BodyText']),
+            Spacer(1, 10), Paragraph("First 15 Events (Chronological)", styles['Heading3']),
+            Spacer(1, 6), tl_table, Spacer(1, 16),
+        ]),
+        KeepTogether([
+            Paragraph("Top 5 Busiest Time Windows", styles['Heading3']),
+            Spacer(1, 6), win_table, Spacer(1, 16),
+        ]),
+    ]
+
+
+def generate_indicators_scoring_section(malware_analysis_results, styles, heading_style, section_number=6):
+    """Section 6: Indicators & Scoring."""
     indicators = malware_analysis_results.get('malware_indicators', [])
+    title      = Paragraph(f"{section_number}) INDICATORS & SCORING (SUMMARY)", heading_style)
 
     if not indicators:
-        section_content.append(KeepTogether([
-            Paragraph(f"{section_number}) INDICATORS & SCORING (SUMMARY)", heading_style),
-            Spacer(1, 10),
-            Paragraph("<i>No malware indicators detected in the analyzed logs.</i>", styles['BodyText']),
-            Spacer(1, 20),
-        ]))
-        return section_content
+        return [KeepTogether([title, Spacer(1, 10),
+                              Paragraph("<i>No malware indicators detected in the analyzed logs.</i>", styles['BodyText']),
+                              Spacer(1, 20)])]
 
-    # ── Section heading ───────────────────────────────────────────────────────
-    section_content.append(Paragraph(f"{section_number}) INDICATORS & SCORING (SUMMARY)", heading_style))
-    section_content.append(Spacer(1, 10))
+    label_style = ParagraphStyle('IndicatorLabel', parent=styles['BodyText'], fontSize=10, leading=14, spaceAfter=2)
+    content     = []
 
-    # ── Per-indicator blocks ──────────────────────────────────────────────────
-    label_style = ParagraphStyle(
-        'IndicatorLabel',
-        parent=styles['BodyText'],
-        fontSize=10,
-        leading=14,
-        spaceAfter=2,
-    )
-
-    risk_icons = {
-        "Critical": "CRITICAL",
-        "High":     "HIGH",
-        "Medium":   "MEDIUM",
-        "Low":      "LOW",
-    }
-
-    for idx, indicator in enumerate(indicators, 1):
-        matrix_risk    = indicator.get('matrix_risk', 'Unknown')
-        impact         = indicator.get('impact', '?')
-        conf_display   = _build_confidence_display(indicator)
-        risk_label     = risk_icons.get(matrix_risk, matrix_risk)
-        risk_color     = _get_risk_color(matrix_risk)
-        base_conf      = indicator.get('base_confidence', '?')
-        actual_conf    = indicator.get('actual_confidence', base_conf)
-        eid            = indicator['event_id']
-        # Event IDs 1-29 are Sysmon-range and overlap with Windows System IDs.
-        # For malware indicators these low IDs are always Sysmon events.
-        prefer_sysmon  = eid.isdigit() and 1 <= int(eid) <= 29
-        eid_desc       = _get_event_description(eid, prefer_sysmon=prefer_sysmon)
-
-        header_style = ParagraphStyle(
-            f'IndHeader{idx}',
-            parent=styles['BodyText'],
-            fontSize=11,
-            leading=15,
-            textColor=risk_color,
-            spaceBefore=8,
-            spaceAfter=2,
-        )
-
-        # Build all lines for this indicator and wrap in KeepTogether
-        block = [
-            Paragraph(
-                f"<b>{idx}. [{risk_label}]  {_truncate(indicator.get('threat', indicator['description']), 120)}</b>",
-                header_style
-            ),
-            Paragraph(f"<b>Event ID {eid}:</b> {eid_desc}", label_style),
-            Paragraph(f"<b>Category:</b> {_truncate(indicator['category'], 100)}", label_style),
-            Paragraph(f"<b>Indicator:</b> {_truncate(indicator["description"], 400)}", label_style),
-            Paragraph(f"<b>Impact:</b> {impact}/4", label_style),
-            Paragraph(f"<b>Confidence:</b> {conf_display}", label_style),
-            Paragraph(
-                f"<b>Evidence:</b> Event ID {eid} occurred {indicator['count']} time(s)",
-                label_style
-            ),
+    for idx, ind in enumerate(indicators, 1):
+        matrix_risk   = ind.get('matrix_risk', 'Unknown')
+        risk_color    = _RISK_COLORS.get(matrix_risk, colors.black)
+        prefer_sysmon = ind.get('event_type', '') == 'Sysmon'
+        eid           = ind['event_id']
+        sysmon_tag    = ' (Sysmon)' if prefer_sysmon else ''
+        hdr_style     = ParagraphStyle(f'IndHeader{idx}', parent=styles['BodyText'],
+                                       fontSize=11, leading=15, textColor=risk_color, spaceBefore=8, spaceAfter=2)
+        # For the first indicator, include the section title in the KeepTogether
+        # so the heading is never orphaned on a page without any content below it.
+        leader = [title, Spacer(1, 10)] if idx == 1 else []
+        content.append(KeepTogether(leader + [
+            Paragraph(f"<b>{idx}. [{_RISK_LABELS.get(matrix_risk, matrix_risk)}]  {ind.get('threat', ind['description'])}</b>", hdr_style),
+            Paragraph(f"<b>Event ID {eid}{sysmon_tag}:</b> {_get_event_description(eid, prefer_sysmon)}", label_style),
+            Paragraph(f"<b>Category:</b> {ind['category']}", label_style),
+            Paragraph(f"<b>Indicator:</b> {ind['description']}", label_style),
+            Paragraph(f"<b>Impact:</b> {ind.get('impact','?')}/4", label_style),
+            Paragraph(f"<b>Confidence:</b> {_build_confidence_display(ind)}", label_style),
+            Paragraph(f"<b>Evidence:</b> Event ID {eid}{sysmon_tag} occurred {ind['count']} time(s)", label_style),
             Spacer(1, 8),
-        ]
-        section_content.append(KeepTogether(block))
+        ]))
 
-    # ── Overall summary bar ───────────────────────────────────────────────────
-    section_content.append(Spacer(1, 4))
+    risk_level    = malware_analysis_results.get('risk_level', 'Unknown')
+    summary_style = ParagraphStyle('SummaryText', parent=styles['BodyText'],
+                                   fontSize=11, leading=16, textColor=_RISK_COLORS.get(risk_level, colors.black))
+    content += [
+        Spacer(1, 4),
+        Paragraph(
+            f"<b>Highest Impact:</b> {malware_analysis_results.get('highest_impact','?')}/4  |  "
+            f"<b>Highest Confidence:</b> {malware_analysis_results.get('highest_confidence','?')}/4  ->  "
+            f"<b>Overall Risk Level:</b> {risk_level}",
+            summary_style
+        ),
+        Spacer(1, 16),
+    ]
+    return content
 
-    highest_impact     = malware_analysis_results.get('highest_impact', '?')
-    highest_confidence = malware_analysis_results.get('highest_confidence', '?')
-    risk_level         = malware_analysis_results.get('risk_level', 'Unknown')
 
-    summary_style = ParagraphStyle(
-        'SummaryText',
-        parent=styles['BodyText'],
-        fontSize=11,
-        leading=16,
-        textColor=_get_risk_color(risk_level),
-    )
+def generate_deep_dives_section(deep_dive_data, heading_style, styles, section_number=7):
+    """Section 7: Deep Dives (Evidence) — only renders populated subsections."""
+    SKIP_DEDUP    = {"timestamp", "computer"}
+    subsections   = [
+        ("suspicious_execution", "Suspicious Activity"),
+        ("persistence_account",  "Persistence Changes — Account Activity"),
+        ("persistence_services", "Persistence Changes — Service Installations"),
+        ("credential_dumps",     "Credential Theft & Memory Access"),
+        ("credential_logon",     "Logon & Directory Activity"),
+        ("network_observations", "Network Observations"),
+        ("enumeration",          "Enumeration & Discovery"),
+        ("av_protections",       "Malware / AV / OS Protections"),
+        ("removable_media",      "Removable Media"),
+    ]
+    sub_style  = ParagraphStyle('SubHeading',      parent=styles['Heading2'], fontSize=11,
+                                textColor=_BRAND_BLUE, spaceBefore=12, spaceAfter=6, keepWithNext=1)
+    cell_style    = ParagraphStyle('EvidenceCell',    parent=styles['BodyText'], fontSize=9, leading=12)
+    hdr_cell      = ParagraphStyle('EvidenceCellHdr', parent=cell_style, textColor=colors.whitesmoke)
+    finding_style = ParagraphStyle('EvidenceFinding', parent=styles['BodyText'], fontSize=9,
+                                   leading=13, textColor=colors.HexColor('#374151'), italic=1)
 
-    section_content.append(Paragraph(
-        f"<b>Highest Impact:</b> {highest_impact}/4  |  "
-        f"<b>Highest Confidence:</b> {highest_confidence}/4  →  "
-        f"<b>Overall Risk Level:</b> {risk_level}",
-        summary_style
-    ))
-    section_content.append(Spacer(1, 16))
+    # Pre-filter: only include sections that will produce at least one visible card.
+    # A card is visible if it has >= 2 forensic fields beyond Category/Timestamp/Computer.
+    _BOILERPLATE_LABELS = {'Field', 'Timestamp', 'Computer'}  # shared by pre-filter and card filter
 
-    return section_content
+    def _has_visible_cards(evidence_list):
+        for ev in evidence_list:
+            forensic_count = sum(
+                1 for field, label in _FIELD_LABELS.items()
+                if label not in _BOILERPLATE_LABELS
+                and ev.get(field)
+                and str(ev[field]).strip().lower() not in ('none', '', '-')
+            )
+            if forensic_count >= 2:
+                return True
+        return False
+
+    populated = [
+        (key, title) for key, title in subsections
+        if deep_dive_data.get(key) and _has_visible_cards(deep_dive_data[key])
+    ]
+
+    section_heading = Paragraph(f"{section_number}) DEEP DIVES (EVIDENCE)", heading_style)
+    content = []
+
+    for i, (key, title) in enumerate(populated):
+        sub_para = Paragraph(f"{section_number}.{i + 1}  {title}", sub_style)
+        leader = [section_heading, Spacer(1, 8), sub_para] if i == 0 else [sub_para]
+
+        evidence_list = deep_dive_data[key]
+        seen, unique = set(), []
+        for ev in evidence_list:
+            fp = tuple(sorted(
+                (k, str(v)) for k, v in ev.items()
+                if k not in SKIP_DEDUP and v and str(v).strip().lower() not in ("none", "", "-")
+            ))
+            if fp not in seen:
+                seen.add(fp)
+                unique.append(ev)
+
+        display = unique[:20]
+        cards   = []
+
+        for ev in display:
+            rows = [[Paragraph("<b>Field</b>", hdr_cell), Paragraph("<b>Value</b>", hdr_cell)]]
+            # Category is shown in the subsection heading — omitted from cards.
+            for field, label in _FIELD_LABELS.items():
+                val = ev.get(field)
+                if not val or str(val).strip().lower() in ("none", "", "-"):
+                    continue
+                display_val = str(val)[:197] + "..." if len(str(val)) > 200 else str(val)
+                # Escape special XML characters so ReportLab's markup parser
+                # doesn't silently drop backslashes or misinterpret angle brackets
+                safe_val = (display_val
+                            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                            .replace("\\", "&#92;"))
+                rows.append([Paragraph(f"<b>{label}</b>", cell_style), Paragraph(safe_val, cell_style)])
+            forensic_rows = [r for r in rows if r[0].text.replace('<b>','').replace('</b>','') not in _BOILERPLATE_LABELS]
+            if len(rows) <= 1 or len(forensic_rows) < 2:
+                continue
+            # Small cards (<=8 rows): never split — splitByRow=False keeps the
+            # table whole, and KeepTogether keeps it on one page.
+            # Large cards: allow page split with a repeated header row so the
+            # analyst always sees the Field/Value header on every page.
+            is_small = len(rows) <= 8
+            ev_table = Table(
+                rows,
+                colWidths=[1.6*inch, 4.9*inch],
+                splitByRow=not is_small,
+                repeatRows=1,
+            )
+            ev_table.setStyle(_STANDARD_TABLE_STYLE)
+            # Always prepend a small Spacer so ReportLab has a natural break
+            # point *before* the card rather than being forced to split inside it.
+            finding_text = ev.get('_description', '').strip()
+            finding_para = (
+                [Paragraph(f'<i>{finding_text}</i>', finding_style), Spacer(1, 4)]
+                if finding_text else []
+            )
+            card_items = [Spacer(1, 6), ev_table] + finding_para + [Spacer(1, 6)]
+            if is_small:
+                cards.append(KeepTogether(card_items))
+            else:
+                cards.append(card_items)
+
+        if cards:
+            # Anchor subsection heading to first card so the heading is never
+            # orphaned at the bottom of a page with no content below it.
+            first = cards[0]
+            if isinstance(first, KeepTogether):
+                first_items = list(first._content)
+            else:
+                first_items = list(first)
+            content.append(KeepTogether(leader + [Spacer(1, 6)] + first_items))
+            for card in cards[1:]:
+                if isinstance(card, KeepTogether):
+                    content.append(card)
+                else:
+                    content.extend(card)
+        else:
+            content.append(KeepTogether(leader))
+
+        content.append(Spacer(1, 10))
+
+    if not populated:
+        content.append(Paragraph("<i>No deep-dive evidence was extracted from the analyzed logs.</i>", styles['BodyText']))
+    content.append(Spacer(1, 16))
+    return content
 
 
 if __name__ == "__main__":
     print("=== DuCharme Triage Assistant - Report Generator ===")
-    print("This module generates PDF reports from log analysis.")
     print("Usage: Import and call create_test_pdf() with analysis data.")
