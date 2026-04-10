@@ -9,6 +9,7 @@ USES CSV FILES for malware/breach indicator definitions with Impact and BaseConf
 from collections import defaultdict
 import csv
 import os
+import re
 import sys
 from datetime import datetime, timedelta
 
@@ -30,16 +31,6 @@ HIGH_SIGNAL_SECURITY = {
     '4776',  # Credential validation failed
 }
 
-# System event IDs that are high-signal on their own (no indicator match needed).
-# 7045 is intentionally excluded — service installs are only suspicious when the
-# service path matches a known-bad location (Temp, Public, etc.).  Blanket-matching
-# every service install produces enormous false-positive noise from legitimate
-# driver/software installs (AMD, SteelSeries, Gaming Services, etc.).
-HIGH_SIGNAL_SYSTEM = {
-    # (currently empty — add System EIDs here only if the event ID alone is
-    #  sufficient evidence without needing to inspect the event fields)
-}
-
 # Impact x Confidence risk matrix (both axes 1-indexed, 1-4)
 # Rows = impact, Cols = confidence
 _RISK_MATRIX = [
@@ -56,6 +47,9 @@ _MITRE_ORDER = [
     'Persistence', 'Execution', 'Lateral Movement',
     'Command and Control', 'Impact',
 ]
+
+# Compiled once at module load — used in EID 3 private-IP suppression
+_PRIVATE_172_RE = re.compile(r'^172\.(1[6-9]|2[0-9]|3[01])\.')
 
 
 # ------------------------------------------------------------------ #
@@ -470,9 +464,8 @@ class MalwareAnalyzer:
                 # (_XXXXXX, e.g. OneSyncSvc_104139, NPSMSvc_104139) when it creates
                 # per-session copies of built-in services. Their ImagePath is always
                 # a legitimate svchost.exe command — suppress them entirely.
-                import re as _re13svc
                 _svc_name = reg_key.split('\\services\\', 1)[-1].split('\\')[0]
-                if _re13svc.search(r'_[0-9a-f]{4,8}$', _svc_name, _re13svc.IGNORECASE):
+                if re.search(r'_[0-9a-f]{4,8}$', _svc_name, re.IGNORECASE):
                     return False
                 # Everything else (Desktop, AppData, Public, temp, unknown paths) fires
                 return True
@@ -501,9 +494,8 @@ class MalwareAnalyzer:
             # RunOnce keys written by signed installer bundles are never persistence
             # malware — they register a cleanup/finalize step post-reboot with a GUID
             # key name (e.g. RunOnce\{91ee571b-...}). Suppress these.
-            import re as _re13
             _RUNONCE_GUID = r'runonce\\\{[0-9a-f\-]{36}\}'
-            if 'runonce' in reg_key and _re13.search(_RUNONCE_GUID, reg_key, _re13.IGNORECASE):
+            if 'runonce' in reg_key and re.search(_RUNONCE_GUID, reg_key, re.IGNORECASE):
                 return False
             # reg.exe is an attacker-controlled tool — never suppress it regardless
             # of its location (system32). Same policy as EID 12.
@@ -564,46 +556,45 @@ class MalwareAnalyzer:
         #   - Known package-manager / dev-tool invocations of cmd.exe and powershell.exe
         #     are not flagged unless cmdline contains a genuinely suspicious pattern.
         if event_type == "Sysmon" and event_id == "1":
-            import re as _re
             image_full   = str(data.get('Image') or '').lower()
             image        = image_full.rsplit('\\', 1)[-1]
             cmdline      = str(data.get('CommandLine') or '').lower()
             parent_full  = str(data.get('ParentImage') or '').lower()
             parent       = parent_full.rsplit('\\', 1)[-1]
-            current_dir  = str(data.get('CurrentDirectory') or '').lower()
 
             def _whole_word(ind, text):
-                pattern = r'(?<![a-zA-Z0-9_\-])' + _re.escape(ind.lower()) + r'(?![a-zA-Z0-9_\-])'
-                return bool(_re.search(pattern, text))
+                pattern = r'(?<![a-zA-Z0-9_\-])' + re.escape(ind.lower()) + r'(?![a-zA-Z0-9_\-])'
+                return bool(re.search(pattern, text))
 
             # --- Suspicious parent-chain heuristics (fires even without a CSV name match) ---
             # These catch attacks where the payload process name is not in the indicator
             # list (e.g. jjs.exe, a renamed binary, or a random MSI-extracted .tmp file).
-
-            # Heuristic A: Unknown scripting engine / JVM tool spawning a shell.
-            # jjs.exe (Java JVM scripting shell), wmic.exe, mshta.exe, cscript.exe etc.
-            # spawning cmd.exe / powershell.exe is inherently suspicious.
             _SUSPICIOUS_SPAWNERS = {
                 'jjs.exe', 'wmic.exe', 'mshta.exe', 'cscript.exe', 'wscript.exe',
                 'regsvr32.exe', 'rundll32.exe', 'msiexec.exe', 'installutil.exe',
                 'schtasks.exe', 'at.exe', 'odbcconf.exe', 'pcalua.exe', 'forfiles.exe',
             }
-            _RECON_SHELLS = {'cmd.exe', 'powershell.exe', 'whoami.exe', 'net.exe',
-                             'ipconfig.exe', 'systeminfo.exe', 'tasklist.exe',
-                             'nltest.exe', 'arp.exe', 'route.exe', 'netstat.exe'}
+            _RECON_SHELLS = {
+                'cmd.exe', 'powershell.exe', 'whoami.exe', 'net.exe',
+                'ipconfig.exe', 'systeminfo.exe', 'tasklist.exe',
+                'nltest.exe', 'arp.exe', 'route.exe', 'netstat.exe',
+            }
+            _DISCOVERY_CMDS = (
+                'whoami', 'systeminfo', 'ipconfig', 'net user', 'net group',
+                'nltest', 'arp ', 'route print', 'tasklist', 'netstat', '/c ', '/k ',
+            )
+            _INSTALLER_ROOTS = (
+                'c:\\program files\\', 'c:\\program files (x86)\\',
+                'c:\\windows\\system32\\', 'c:\\windows\\syswow64\\',
+            )
+
+            # Heuristic A: Known LOLBIN / scripting engine spawning a recon shell.
             if parent in _SUSPICIOUS_SPAWNERS and image in _RECON_SHELLS:
                 # Only fire when the spawner itself is not from a safe installer root.
                 # Vendors like Adobe/Office legitimately launch cmd.exe during installation.
-                _INSTALLER_ROOTS = (
-                    'c:\\program files\\', 'c:\\program files (x86)\\',
-                    'c:\\windows\\system32\\', 'c:\\windows\\syswow64\\',
-                )
                 if not any(parent_full.startswith(r) for r in _INSTALLER_ROOTS):
                     return True
                 # Even from a trusted root, flag if the command is discovery-oriented
-                _DISCOVERY_CMDS = ('whoami', 'systeminfo', 'ipconfig', 'net user',
-                                   'net group', 'nltest', 'arp ', 'route print',
-                                   'tasklist', 'netstat')
                 if any(d in cmdline for d in _DISCOVERY_CMDS):
                     return True
 
@@ -619,10 +610,7 @@ class MalwareAnalyzer:
                 # their own sub-installers) is suspicious
                 if parent in {'msiexec.exe'} and image in {'cmd.exe', 'whoami.exe',
                                                             'powershell.exe', 'net.exe'}:
-                    _DISCOVERY_CMDS2 = ('whoami', 'systeminfo', 'ipconfig', 'net user',
-                                        'net group', 'nltest', 'arp ', 'route print',
-                                        'tasklist', 'netstat', '/c ', '/k ')
-                    if any(d in cmdline for d in _DISCOVERY_CMDS2):
+                    if any(d in cmdline for d in _DISCOVERY_CMDS):
                         return True
 
             # Does the indicator match at all?
@@ -759,12 +747,10 @@ class MalwareAnalyzer:
             # Suppress connections to private/loopback ranges — these are always
             # internal and cannot be C2 callbacks to an external attacker server.
             # Covers 127.x, 10.x, 172.16-31.x, 192.168.x, and ::1 (IPv6 loopback).
-            import re as _re3
             _PRIVATE_PREFIXES = ('127.', '10.', '192.168.', '::1', '0:0:0:0:0:0:0:1')
-            _PRIVATE_172 = _re3.compile(r'^172\.(1[6-9]|2[0-9]|3[01])\.')
             if any(dest_ip.startswith(p) for p in _PRIVATE_PREFIXES):
                 return False
-            if _PRIVATE_172.match(dest_ip):
+            if _PRIVATE_172_RE.match(dest_ip):
                 return False
 
             # Indicators like 'rundll32' and 'powershell' are process-name strings
