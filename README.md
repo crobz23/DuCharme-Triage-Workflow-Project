@@ -40,7 +40,7 @@ A Windows event log analyzer that helps incident responders quickly identify mal
 
 **report.py:**
 - Three new sections added to the PDF report: Executive Summary (Section 1), Deep Dive Evidence (Section 7), and Assessment & Actions (Section 8). The report is now eight sections total
-- The Executive Summary displays the overall risk level, active MITRE threat categories, and a plain-English narrative generated from the CSV Finding fields
+- The Executive Summary displays the overall risk level, active MITRE threat categories, and a narrative generated from the CSV Finding fields
 - The Deep Dive Evidence section shows the specific event evidence (timestamps, processes, IPs, registry keys, etc.) for each flagged threat, so analysts can verify findings without returning to the raw logs
 - The Assessment & Actions section lists immediate containment steps and follow-up recommendations pulled directly from the CSV, tailored to the threats detected in that specific analysis
 
