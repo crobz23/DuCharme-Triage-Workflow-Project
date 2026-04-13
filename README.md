@@ -24,7 +24,7 @@ A Windows event log analyzer that helps incident responders quickly identify mal
 
 ## Release Notes
 
-### Version 7.0 (Current)
+### Version 0.7 (Current)
 
 **parser.py:**
 - Rewritten to use the Rust-based `evtx` library, replacing the previous Python-based parser. Parsing is now 3-5x faster on the same hardware
