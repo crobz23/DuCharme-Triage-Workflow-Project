@@ -45,7 +45,7 @@ A Windows event log analyzer that helps incident responders quickly identify mal
 - The Assessment & Actions section lists immediate containment steps and follow-up recommendations pulled directly from the CSV, tailored to the threats detected in that specific analysis
 
 **gui.py:**
-- The malware summary panel now renders structured evidence for each flagged event inline, using the evidence fields extracted by the parser.
+- The malware summary panel now renders a preview of the structured evidence, using the evidence fields extracted by the parser.
 
 **defender_indicators.csv (new file):**
 - Covers Defender-specific Event IDs including 1116 (malware detected), 1118 (remediation failed), 1121 (behavior blocked), 1123 (ransomware protection triggered), 5001 and 5004 (Tamper Protection disabled or tampered with), and others
