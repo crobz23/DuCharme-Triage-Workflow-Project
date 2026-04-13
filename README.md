@@ -27,7 +27,7 @@ A Windows event log analyzer that helps incident responders quickly identify mal
 ### Version 0.7 (Current)
 
 **parser.py:**
-- Rewritten to use the Rust-based `evtx` library, replacing the previous Python-based parser. Parsing is now 3-5x faster on the same hardware
+- Rewritten to use the Rust-based `evtx` library, replacing the previous Python-based parser. Parsing is now 3-5x faster
 - The parser now extracts structured evidence fields from each event at parse time: process chains, parent processes, command lines, IP addresses, user accounts, logon types, registry keys, and more. This data feeds the new Deep Dive Evidence section in the GUI and PDF report directly
 
 **analysis.py:**
