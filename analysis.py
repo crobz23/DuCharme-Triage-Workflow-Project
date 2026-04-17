@@ -1,9 +1,9 @@
 # analysis.py - Malware-focused threat analysis engine with Impact/Confidence Matrix
 """
 DuCharme Triage Assistant - Malware Analysis Engine
-Analyzes Windows and Sysmon events for malware indicators using Impact × Confidence matrix.
+Analyzes Windows and Sysmon events for threat indicators using Impact × Confidence matrix.
 
-USES CSV FILES for malware/breach indicator definitions with Impact and BaseConfidence ratings.
+USES CSV FILES for malware/breach indicator definitions
 """
 
 from collections import defaultdict
@@ -997,7 +997,7 @@ class MalwareAnalyzer:
         # Rule 1: injection + memory access = in-memory attack chain
         if '8' in fired_eids and '10' in fired_eids:
             for ind in by_eid['8'] + by_eid['10']:
-                _boost(ind, 'correlation: Event ID 8+10')
+                _boost(ind, 'correlation: EID 8 (thread injection) + EID 10 (process access) = in-memory attack chain')
 
         # Rule 2: lsass memory access + mimikatz file = confirmed credential dump
         eid10_cred = [i for i in by_eid['10'] if i.get('category') == 'Credential Access']
@@ -1005,36 +1005,29 @@ class MalwareAnalyzer:
                       or 'Credential' in i.get('threat', '')]
         if eid10_cred and eid11_mimi:
             for ind in eid10_cred + eid11_mimi:
-                _boost(ind, 'correlation: Event ID 10+11')
+                _boost(ind, 'correlation: EID 10 (lsass access) + EID 11 (file create) = credential dumping')
 
         # Rule 3: hacking tool launched + C2 network connection
         eid1_tool = [i for i in by_eid['1'] if i.get('category') == 'Execution']
         eid3_c2   = [i for i in by_eid['3']]
         if eid1_tool and eid3_c2:
             for ind in eid1_tool + eid3_c2:
-                _boost(ind, 'correlation: Event ID 1+3')
+                _boost(ind, 'correlation: EID 1 (hacking tool launched) + EID 3 (network connection) = C2 callback')
 
         # Rule 4: security control disabled + malicious service installed
         evasion_eids = {'12', '13', '5001', '5004', '1102'}
         if fired_eids & evasion_eids and '7045' in fired_eids:
-            matched_evasion = sorted(fired_eids & evasion_eids, key=int)
-            evasion_label = '+'.join(matched_evasion)
             for eid in fired_eids & evasion_eids:
                 for ind in by_eid[eid]:
-                    _boost(ind, f'correlation: Event ID {evasion_label}+7045')
+                    _boost(ind, 'correlation: security control disabled + EID 7045 (malicious service) = defense evasion → persistence')
             for ind in by_eid['7045']:
-                _boost(ind, f'correlation: Event ID {evasion_label}+7045')
+                _boost(ind, 'correlation: security control disabled + EID 7045 (malicious service) = defense evasion → persistence')
 
-        # Rule 5: log cleared + any other indicator = deliberate cover-up
-        if '1102' in fired_eids and len(fired_eids) > 1:
-            other_eids = '+'.join(sorted(fired_eids - {'1102'}, key=int))
-            for ind in by_eid['1102']:
-                _boost(ind, f'correlation: Event ID 1102+{other_eids}')
 
         # Rule 6: failed logins + lockout = confirmed brute-force
         if '4625' in fired_eids and '4740' in fired_eids:
             for ind in by_eid['4625'] + by_eid['4740']:
-                _boost(ind, 'correlation: Event ID 4625+4740')
+                _boost(ind, 'correlation: EID 4625 (failed login) + EID 4740 (account lockout) = brute force')
 
         # Rule 7: MSI-delivery chain — EID 2 (msiexec timestomping) + EID 1
         # (heuristic shell spawn) indicates an MSI package was used to deliver
@@ -1047,14 +1040,9 @@ class MalwareAnalyzer:
                           if i.get('category') == 'Execution']
         if eid2_msi and eid1_heuristic:
             for ind in eid2_msi + eid1_heuristic:
-                _boost(ind, 'correlation: MSI delivery chain (EID 2+1)')
+                _boost(ind, 'correlation: EID 2 (timestomping) + EID 1 (process create) = MSI payload delivery')
 
-        # Rule 8: unknown-spawner heuristic (EID 1 parent-chain) + C2 connection
-        # (EID 3).  A scripting engine or .tmp binary spawning a shell that is
-        # then followed by an outbound C2 connection confirms the execution stage.
-        if eid1_heuristic and '3' in fired_eids:
-            for ind in eid1_heuristic + by_eid.get('3', []):
-                _boost(ind, 'correlation: heuristic spawner + C2 (EID 1+3)')
+
 
         return malware_indicators
 
