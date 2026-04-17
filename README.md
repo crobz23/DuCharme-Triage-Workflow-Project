@@ -1,6 +1,6 @@
 # DuCharme Triage Assistant
 
-**Version 0.7** | Trine University Senior Capstone Project
+**Version 1.0** | Trine University Senior Capstone Project
 
 A Windows event log analyzer that helps incident responders quickly identify malware and security breaches through a triage workflow. Built for DuCharme, McMillen & Associates, Inc.
 
@@ -24,7 +24,7 @@ A Windows event log analyzer that helps incident responders quickly identify mal
 
 ## Release Notes
 
-### Version 0.7 (Current)
+### Version 1.0 (Current)
 
 **parser.py:**
 - Rewritten to use the Rust-based `evtx` library, replacing the previous Python-based parser. Parsing is now 3-5x faster
@@ -501,4 +501,4 @@ DuCharme-Triage-Workflow-Project/
 
 ---
 
-Version 0.7 | Last updated: Apr. 2026
+Version 1.0 | Last updated: Apr. 2026
