@@ -71,7 +71,57 @@ Instead of spending hours digging through logs, you get a clean PDF report with 
 
 ### Data Flow Diagram
 
-![DuCharme Triage Assistant — data flow diagram](ducharme_triage_architecture.svg)
+```
+┌──────────────────────────────────────────────┐
+│            Windows event logs                │
+│     Security · System · Sysmon · Defender    │
+└───────────────────────┬──────────────────────┘
+                        │
+                        ▼
+             ┌──────────────────────┐
+             │      parser.py       │
+             │  Parse · classify ·  │
+             │   extract fields     │
+             └──────────┬───────────┘
+                        │
+                        ▼
+             ┌──────────────────────────────┐
+             │           gui.py             │
+             │  Display results             │
+             │  Filter by Event ID & time   │
+             │  Collect analyst notes       │
+             │  Trigger report              │
+             └───┬──────────────────────────┘
+                 │ calls                    ▲
+                 ▼                         │ results (- - -)
+    ┌────────────────────────┐             │
+    │      analysis.py       ├─────────────┘
+    │  Timeline · burst      │
+    │  detection             │
+    │  Score threats         │
+    │  (Impact × Confidence) │
+    │  Correlate attack      │
+    │  chains · assess risk  │
+    └────────────────────────┘
+                 │
+    (passed back through gui.py)
+                 │
+                 ▼
+    ┌────────────────────────────────────┐
+    │             report.py              │
+    ├────────────────────────────────────┤
+    │  Executive summary  │  Timeline    │
+    │  Threat indicators  │  Deep dive   │
+    │  Incident context   │  Assessment  │
+    │                     │  & actions   │
+    └──────────────────┬─────────────────┘
+                       │
+                       ▼
+            ┌─────────────────────┐
+            │  triage_report_     │
+            │      *.pdf          │
+            └─────────────────────┘
+```
 
 ---
 
