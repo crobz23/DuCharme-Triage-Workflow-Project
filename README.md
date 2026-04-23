@@ -102,6 +102,11 @@ Instead of spending hours digging through logs, you get a clean PDF report with 
     │  (Impact × Confidence) │
     │  Correlate attack      │
     │  chains · assess risk  │
+    ├────────────────────────┤
+    │  Loads indicator CSVs: │
+    │  malware_indicators    │
+    │  breach_indicators     │
+    │  defender_indicators   │
     └────────────────────────┘
                  │
     (passed back through gui.py)
